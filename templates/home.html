@@ -1,7 +1,11 @@
-{% extends 'base.html' %}{% load socialaccount %}
-{% block content %}<h1>CCI Dashboard</h1>
-{% if user.is_authenticated %}
-  {% if user.role %}<p>Signed in as {{ user.get_full_name|default:user.username }}. Your role is {{ user.get_role_display }}.</p><p>The dashboard features are being migrated and are not yet available here.</p>
-  {% else %}<p>Your account is pending approval. An administrator must approve access before you can use the dashboard.</p>{% endif %}
-{% else %}<p>Sign in with ORCID to request access to the dashboard.</p><form method="post" action="{% provider_login_url 'orcid' %}">{% csrf_token %}<button type="submit">Sign in with ORCID</button></form>{% endif %}
-{% endblock %}
+{% extends 'base.html' %}{% load socialaccount static %}{% block content %}
+<section class="overview-view"><div class="overview-heading"><h1 class="title is-2">Overview</h1>
+{% if not user.is_authenticated %}<p class="overview-period">Sign in with ORCID to request access to the dashboard.</p><form method="post" action="{% provider_login_url 'orcid' %}">{% csrf_token %}<button class="button is-link" type="submit">Sign in with ORCID</button></form></div>
+{% elif not user.role %}<p>Your account is pending approval. An administrator must approve access before you can use the dashboard.</p></div>
+{% elif user.role == 'researcher' %}<p class="overview-period">Signed in as {{ user.get_full_name|default:user.username }}.</p></div><div class="summary-grid"><article class="summary-card disabled-card"><p class="eyebrow">Managed repository</p><h2 class="title is-4">My storage</h2><p>Your storage will be available once an administrator verifies your OMERO group access.</p></article><article class="summary-card disabled-card"><p class="eyebrow">Facility support</p><h2 class="title is-4">My tickets</h2><p>Researcher ticket access is being prepared.</p></article></div>
+{% else %}<p class="overview-period">Signed in as {{ user.get_full_name|default:user.username }} · {{ user.get_role_display }}</p></div>
+<div class="summary-grid"><a class="summary-card summary-card-active dashboard-card-link" href="{% url 'uploads' %}"><div class="card-heading"><span class="card-icon uploads-icon">↑</span></div><div><p class="eyebrow">Data ingestion</p><h2 class="title is-4">Uploads</h2></div><div class="summary-metrics"><div><span>Files imported</span><strong id="overview-files">—</strong></div><div><span>Total data</span><strong id="overview-size">—</strong></div><div><span>Top microscope</span><strong id="overview-scope">—</strong></div></div><div class="card-link">Details →</div></a>
+<a class="summary-card summary-card-active dashboard-card-link" href="{% url 'storage' %}"><div class="card-heading"><span class="card-icon storage-icon">▣</span></div><div><p class="eyebrow">Managed repository</p><h2 class="title is-4">OMERO Storage</h2></div><p>Browse filesets and their storage size.</p><div class="card-link">Details →</div></a>
+<a class="summary-card summary-card-active dashboard-card-link" href="{% url 'tickets' %}"><div class="card-heading"><span class="card-icon tickets-icon">🎫</span></div><div><p class="eyebrow">Facility support</p><h2 class="title is-4">Tickets</h2></div><p>Browse support tickets.</p><div class="card-link">Details →</div></a>
+<article class="summary-card disabled-card"><div class="card-heading"><span class="card-icon compute-icon">⌘</span><span class="status-badge muted">Future</span></div><div><p class="eyebrow">Processing</p><h2 class="title is-4">Compute</h2></div><p class="pending-copy">Compute activity and capacity will be added as the platform grows.</p></article></div>
+<script src="{% static 'js/uploads.js' %}" defer></script>{% endif %}</section>{% endblock %}

@@ -24,8 +24,24 @@ spec:
                 name: dashboard-django-config
             - secretRef:
                 name: dashboard-django-app
-            - secretRef:
-                name: dashboard-django-migration-db
+          # Same database target as the current dashboard, with a separate
+          # migration role. Verify its permissions and rotate exposed credentials.
+          env:
+            - name: PGHOST
+              valueFrom:
+                secretKeyRef: {name: filestatistics-app-credentials, key: PGHOST}
+            - name: PGPORT
+              valueFrom:
+                secretKeyRef: {name: filestatistics-app-credentials, key: PGPORT}
+            - name: PGDATABASE
+              valueFrom:
+                secretKeyRef: {name: filestatistics-app-credentials, key: PGDATABASE}
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef: {name: filestatistics-pg15-credentials, key: POSTGRESQL_USER}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef: {name: filestatistics-pg15-credentials, key: POSTGRESQL_PASSWORD}
           resources:
             requests:
               cpu: 100m

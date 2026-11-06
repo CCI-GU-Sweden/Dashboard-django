@@ -37,8 +37,23 @@ items:
                     name: dashboard-django-config
                 - secretRef:
                     name: dashboard-django-app
-                - secretRef:
-                    name: dashboard-django-runtime-db
+              # Reuse the database keys referenced by the current dashboard.
+              env:
+                - name: PGHOST
+                  valueFrom:
+                    secretKeyRef: {name: filestatistics-app-credentials, key: PGHOST}
+                - name: PGPORT
+                  valueFrom:
+                    secretKeyRef: {name: filestatistics-app-credentials, key: PGPORT}
+                - name: PGDATABASE
+                  valueFrom:
+                    secretKeyRef: {name: filestatistics-app-credentials, key: PGDATABASE}
+                - name: PGUSER
+                  valueFrom:
+                    secretKeyRef: {name: filestatistics-app-credentials, key: PGUSER_DASHBOARD}
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef: {name: filestatistics-app-credentials, key: PGPASSWORD_DASHBOARD}
               startupProbe:
                 httpGet:
                   path: /health/live/
@@ -89,10 +104,13 @@ items:
   - apiVersion: route.openshift.io/v1
     kind: Route
     metadata:
-      name: dashboard-django
+      name: dashboard-django-test
+      annotations:
+        haproxy.router.openshift.io/ip_whitelist: "192.168.88.0/24 10.248.128.0/24 10.250.0.225/27 10.244.0.0/16 10.250.8.63/32"
+        haproxy.router.openshift.io/set-forwarded-headers: replace
     spec:
       # Must match the ConfigMap and the exact registered ORCID callback host.
-      host: REPLACE_WITH_TEST_HOST
+      host: dashboard-django-test.apps.k8s.gu.se
       to:
         kind: Service
         name: dashboard-django

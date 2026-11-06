@@ -1,0 +1,94 @@
+# Non-destructive application smoke test. Replace the image digest and use a
+# unique Job name for each run. Creates and removes one temporary test session.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dashboard-django-smoke-REPLACE_WITH_RELEASE
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: smoke
+          image: REPLACE_WITH_BUILT_IMAGE_DIGEST
+          command: ["python", "-c"]
+          args:
+            - |
+              import os
+              os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'dashboard.settings')
+              import django
+              django.setup()
+              from django.test import Client
+              from accounts.models import User
+              user = User.objects.filter(role=User.Role.ADMIN, is_active=True).first()
+              if not user:
+                  raise RuntimeError('No active administrator is available for smoke testing.')
+              client = Client(HTTP_HOST='dashboard-django-test.apps.k8s.gu.se')
+              client.force_login(user)
+              try:
+                  for path in ['/', '/uploads/', '/storage/', '/tickets/', '/storage/billing/', '/api/uploads/summary', '/api/omero/filesets', '/api/omero/groups', '/api/tickets', '/api/tickets/summary', '/api/tickets/equipment', '/api/omero/billing?startDate=2026-01-01&endDate=2026-02-01']:
+                      response = client.get(path, secure=True)
+                      print(path, response.status_code, flush=True)
+                      if response.status_code != 200:
+                          raise RuntimeError('Smoke test failed.')
+                  import json, uuid
+                  from django.db import connection, transaction
+                  with transaction.atomic():
+                      payload = {'reporter_name': 'Rollback smoke test', 'reporter_identifier': 'test@example.org', 'microscope': '', 'message': 'Temporary rollback test', 'ticket_type': 'USER_REQUEST', 'issue_type': '', 'priority': 'NORMAL', 'source_event_id': str(uuid.uuid4())}
+                      with connection.cursor() as cursor:
+                          cursor.execute('SELECT equipment_id FROM public.ticket_equipment WHERE active = true ORDER BY equipment_id LIMIT 1')
+                          equipment = cursor.fetchone()
+                      if equipment:
+                          payload['microscope'] = equipment[0]
+                      response = client.post('/api/tickets', data=json.dumps(payload), content_type='application/json', secure=True)
+                      print('ticket creation:', response.status_code, flush=True)
+                      if response.status_code != 201:
+                          raise RuntimeError('Ticket creation smoke test failed.')
+                      retry = client.post('/api/tickets', data=json.dumps(payload), content_type='application/json', secure=True)
+                      print('ticket retry:', retry.status_code, flush=True)
+                      if retry.status_code != 200 or retry.json()['ticket_id'] != response.json()['ticket_id']:
+                          raise RuntimeError('Ticket retry smoke test failed.')
+                      payload['message'] = 'Changed request'
+                      conflict = client.post('/api/tickets', data=json.dumps(payload), content_type='application/json', secure=True)
+                      print('ticket retry conflict:', conflict.status_code, flush=True)
+                      if conflict.status_code != 409:
+                          raise RuntimeError('Ticket conflict smoke test failed.')
+                      ticket_id = response.json()['ticket_id']
+                      changes = {'version': 1, 'status': 'IN_PROGRESS', 'priority': 'HIGH', 'change_note': 'Smoke test'}
+                      updated = client.patch('/api/tickets/' + ticket_id, data=json.dumps(changes), content_type='application/json', secure=True)
+                      print('ticket update:', updated.status_code, flush=True)
+                      if updated.status_code != 200 or updated.json()['version'] != 2:
+                          raise RuntimeError('Ticket update smoke test failed.')
+                      stale = client.patch('/api/tickets/' + ticket_id, data=json.dumps(changes), content_type='application/json', secure=True)
+                      print('stale ticket update:', stale.status_code, flush=True)
+                      if stale.status_code != 409:
+                          raise RuntimeError('Stale ticket update smoke test failed.')
+                      transaction.set_rollback(True)
+              finally:
+                  client.logout()
+          envFrom:
+            - configMapRef:
+                name: dashboard-django-config
+            - secretRef:
+                name: dashboard-django-app
+          env:
+            - name: PGHOST
+              valueFrom:
+                secretKeyRef: {name: filestatistics-app-credentials, key: PGHOST}
+            - name: PGPORT
+              valueFrom:
+                secretKeyRef: {name: filestatistics-app-credentials, key: PGPORT}
+            - name: PGDATABASE
+              valueFrom:
+                secretKeyRef: {name: filestatistics-app-credentials, key: PGDATABASE}
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef: {name: filestatistics-app-credentials, key: PGUSER_DASHBOARD}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef: {name: filestatistics-app-credentials, key: PGPASSWORD_DASHBOARD}
+          resources:
+            requests: {cpu: 100m, memory: 192Mi}
+            limits: {cpu: 500m, memory: 512Mi}

@@ -50,6 +50,7 @@ if os.environ.get('DJANGO_TRUST_PROXY_HTTPS') == '1':
 SESSION_COOKIE_AGE = 8 * 60 * 60
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_DIRS = [BASE_DIR / 'static']
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 USE_TZ = True
 if os.environ.get('PGHOST'):

@@ -1,6 +1,6 @@
 # Dashboard-django
 
-This repository contains the Django migration foundation described in [DJANGO_BACKEND_PROPOSAL.md](DJANGO_BACKEND_PROPOSAL.md) and [ORCID_LOGIN_PROPOSAL.md](ORCID_LOGIN_PROPOSAL.md). The existing Express dashboard remains separate: its operational pages, APIs and integrations have not yet been ported.
+This repository contains the Django migration described in [DJANGO_BACKEND_PROPOSAL.md](DJANGO_BACKEND_PROPOSAL.md) and [ORCID_LOGIN_PROPOSAL.md](ORCID_LOGIN_PROPOSAL.md). The existing Express dashboard remains separate. The in-progress Django port has staff-only upload statistics, fileset and ticket inventories, ticket creation and status/priority updates, and admin-only read-only billing. It does not yet reproduce all legacy filters, exports, ticket assignments or image uploads, storage-policy changes, collector health or support integration. Researcher-owned records are not exposed until ownership and visibility are implemented.
 
 ## Run locally
 
@@ -27,5 +27,5 @@ The included Dockerfile runs Gunicorn as a non-root user; migrations must run se
 
 For the OpenShift build, migration, application and autoscaling manifests and a web-console walkthrough, see [deploy/openshift/README.md](deploy/openshift/README.md).
 
-This is an early implementation, not a production release. ORCID sandbox login must be tested with real credentials; institutional administrator MFA/assurance, recovery, production proxy configuration, backups, data authorization, and security review remain required before public access. No existing database tables or operational data are accessed by this foundation.
+This is an early implementation, not a production release. Institutional administrator MFA/assurance, recovery, production proxy configuration, backups, full data authorization, and security review remain required before public access. The operational views read existing collector and ticket tables using the configured PostgreSQL connection; no Django migration changes those existing tables.
 

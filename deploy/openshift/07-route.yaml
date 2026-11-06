@@ -1,0 +1,17 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: dashboard-django-test
+  annotations:
+    haproxy.router.openshift.io/ip_whitelist: "192.168.88.0/24 10.248.128.0/24 10.250.0.225/27 10.244.0.0/16 10.250.8.63/32"
+    haproxy.router.openshift.io/set-forwarded-headers: replace
+spec:
+  host: dashboard-django-test.apps.k8s.gu.se
+  to:
+    kind: Service
+    name: dashboard-django
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
