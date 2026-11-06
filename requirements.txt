@@ -1,0 +1,5 @@
+Django==5.2.19
+django-allauth[socialaccount]==65.21.1
+psycopg[binary]==3.3.8
+gunicorn==23.0.0
+whitenoise==6.12.0

@@ -1,0 +1,7 @@
+{% extends 'base.html' %}{% load socialaccount %}
+{% block content %}<h1>CCI Dashboard</h1>
+{% if user.is_authenticated %}
+  {% if user.role %}<p>Signed in as {{ user.get_full_name|default:user.username }}. Your role is {{ user.get_role_display }}.</p><p>The dashboard features are being migrated and are not yet available here.</p>
+  {% else %}<p>Your account is pending approval. An administrator must approve access before you can use the dashboard.</p>{% endif %}
+{% else %}<p>Sign in with ORCID to request access to the dashboard.</p><form method="post" action="{% provider_login_url 'orcid' %}">{% csrf_token %}<button type="submit">Sign in with ORCID</button></form>{% endif %}
+{% endblock %}
