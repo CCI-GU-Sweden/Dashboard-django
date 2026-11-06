@@ -1,0 +1,103 @@
+apiVersion: v1
+kind: List
+items:
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: dashboard-django
+    spec:
+      # Once the HPA is enabled, do not repeatedly overwrite its replica count.
+      replicas: 1
+      strategy:
+        type: RollingUpdate
+        rollingUpdate:
+          maxUnavailable: 0
+          maxSurge: 1
+      selector:
+        matchLabels:
+          app: dashboard-django
+      template:
+        metadata:
+          labels:
+            app: dashboard-django
+        spec:
+          automountServiceAccountToken: false
+          terminationGracePeriodSeconds: 45
+          containers:
+            - name: web
+              # Same immutable image digest used by the successful migration Job.
+              image: REPLACE_WITH_BUILT_IMAGE_DIGEST
+              imagePullPolicy: IfNotPresent
+              ports:
+                - name: http
+                  containerPort: 8000
+                  protocol: TCP
+              envFrom:
+                - configMapRef:
+                    name: dashboard-django-config
+                - secretRef:
+                    name: dashboard-django-app
+                - secretRef:
+                    name: dashboard-django-runtime-db
+              startupProbe:
+                httpGet:
+                  path: /health/live/
+                  port: http
+                  httpHeaders:
+                    - name: Host
+                      value: dashboard-probe.local
+                periodSeconds: 5
+                failureThreshold: 24
+              readinessProbe:
+                httpGet:
+                  path: /health/ready/
+                  port: http
+                  httpHeaders:
+                    - name: Host
+                      value: dashboard-probe.local
+                periodSeconds: 10
+                timeoutSeconds: 3
+                failureThreshold: 3
+              livenessProbe:
+                httpGet:
+                  path: /health/live/
+                  port: http
+                  httpHeaders:
+                    - name: Host
+                      value: dashboard-probe.local
+                periodSeconds: 20
+                timeoutSeconds: 3
+                failureThreshold: 3
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 192Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: dashboard-django
+    spec:
+      selector:
+        app: dashboard-django
+      ports:
+        - name: http
+          port: 80
+          targetPort: http
+  - apiVersion: route.openshift.io/v1
+    kind: Route
+    metadata:
+      name: dashboard-django
+    spec:
+      # Must match the ConfigMap and the exact registered ORCID callback host.
+      host: REPLACE_WITH_TEST_HOST
+      to:
+        kind: Service
+        name: dashboard-django
+      port:
+        targetPort: http
+      tls:
+        termination: edge
+        insecureEdgeTerminationPolicy: Redirect

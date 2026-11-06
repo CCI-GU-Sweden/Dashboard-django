@@ -25,5 +25,7 @@ Outside local debug mode set `DJANGO_SECRET_KEY`, `DJANGO_ALLOWED_HOSTS` (comma-
 
 The included Dockerfile runs Gunicorn as a non-root user; migrations must run separately, once per release. `deploy/hpa.example.yaml` is a starting HPA for a Deployment named `dashboard-django`, not a complete deployment. Configure CPU requests on the Deployment, cluster metrics, readiness/liveness probes (`/health/ready/` and `/health/live/`), resources, secrets, Service and ingress before use. HTTPS redirects exempt only those probe paths. Set `DJANGO_TRUST_PROXY_HTTPS=1` only when a trusted ingress strips client-supplied `X-Forwarded-Proto` and sets it itself. Test graceful shutdown and scale behavior on the actual platform.
 
+For the OpenShift build, migration, application and autoscaling manifests and a web-console walkthrough, see [deploy/openshift/README.md](deploy/openshift/README.md).
+
 This is an early implementation, not a production release. ORCID sandbox login must be tested with real credentials; institutional administrator MFA/assurance, recovery, production proxy configuration, backups, data authorization, and security review remain required before public access. No existing database tables or operational data are accessed by this foundation.
 

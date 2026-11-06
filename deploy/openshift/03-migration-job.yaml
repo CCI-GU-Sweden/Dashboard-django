@@ -1,0 +1,35 @@
+# Create a new Job with a unique name for each release. Run and verify it before
+# rolling out the matching application image. Do not place real credentials here.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dashboard-django-migrate-REPLACE_WITH_RELEASE
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: dashboard-django-migration
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: migrate
+          # Use the exact same immutable internal registry image digest as 04-app.
+          image: REPLACE_WITH_BUILT_IMAGE_DIGEST
+          imagePullPolicy: IfNotPresent
+          command: ["python", "manage.py", "migrate", "--noinput"]
+          envFrom:
+            - configMapRef:
+                name: dashboard-django-config
+            - secretRef:
+                name: dashboard-django-app
+            - secretRef:
+                name: dashboard-django-migration-db
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

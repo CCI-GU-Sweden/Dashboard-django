@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-django-config
+data:
+  DJANGO_DEBUG: "0"
+  # Replace the example hostname in both values with the test Route host.
+  # The additional name is used only in the internal health probe Host header.
+  DJANGO_ALLOWED_HOSTS: dashboard-probe.local,REPLACE_WITH_TEST_HOST
+  DJANGO_CSRF_TRUSTED_ORIGINS: https://REPLACE_WITH_TEST_HOST
+  # Set to 1 ONLY after the platform team confirms forwarded-header trust.
+  DJANGO_TRUST_PROXY_HTTPS: "0"
+  ORCID_ENVIRONMENT: sandbox
