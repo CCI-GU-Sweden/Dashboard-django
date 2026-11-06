@@ -28,11 +28,13 @@ spec:
               client = Client(HTTP_HOST='dashboard-django-test.apps.k8s.gu.se')
               client.force_login(user)
               try:
-                  for path in ['/', '/uploads/', '/storage/', '/tickets/', '/storage/billing/', '/api/uploads/summary', '/api/omero/filesets', '/api/omero/groups', '/api/tickets', '/api/tickets/summary', '/api/tickets/equipment', '/api/omero/billing?startDate=2026-01-01&endDate=2026-02-01']:
+                  for path in ['/', '/uploads/', '/storage/', '/tickets/', '/storage/billing/', '/api/uploads/summary', '/api/uploads/summary?metric=total_file_size_mb&period=30', '/api/uploads/scopes', '/api/omero/filesets', '/api/omero/groups', '/api/omero/history', '/api/omero/overview', '/api/omero/admin/policies', '/api/omero/admin/health', '/api/tickets', '/api/tickets/summary', '/api/tickets/equipment', '/api/omero/billing?startDate=2026-01-01&endDate=2026-02-01']:
                       response = client.get(path, secure=True)
                       print(path, response.status_code, flush=True)
                       if response.status_code != 200:
                           raise RuntimeError('Smoke test failed.')
+                      if path.startswith('/api/uploads/summary') and 'chart_data' not in response.json():
+                          raise RuntimeError('Upload chart data is missing.')
                   import json, uuid
                   from django.db import connection, transaction
                   with transaction.atomic():
@@ -65,6 +67,34 @@ spec:
                       print('stale ticket update:', stale.status_code, flush=True)
                       if stale.status_code != 409:
                           raise RuntimeError('Stale ticket update smoke test failed.')
+                      from datetime import date, timedelta
+                      with connection.cursor() as cursor:
+                          cursor.execute('SELECT group_id FROM public.storage_policy ORDER BY group_id LIMIT 1')
+                          policy_group = cursor.fetchone()
+                          if policy_group:
+                              cursor.execute('SELECT MAX(valid_from) FROM public.storage_policy WHERE group_id = %s', [policy_group[0]])
+                              latest = cursor.fetchone()[0]
+                              effective = max(date.today(), latest) + timedelta(days=400)
+                              policy = {'group_id': str(policy_group[0]), 'policy_type': 'CORE', 'valid_from': effective.isoformat(), 'billing_grace_days': '0', 'notes': 'Rollback smoke test'}
+                              result = client.post('/api/omero/policies', data=json.dumps(policy), content_type='application/json', secure=True)
+                              print('policy creation:', result.status_code, flush=True)
+                              if result.status_code != 201:
+                                  raise RuntimeError('Policy creation smoke test failed.')
+                      from accounts.models import VerifiedOmeroGroup
+                      researcher = User.objects.create_user(username='smoke-' + uuid.uuid4().hex, role=User.Role.RESEARCHER)
+                      VerifiedOmeroGroup.objects.create(user=researcher, group_id=9223372036854775806, valid_until=date.today() + timedelta(days=1), verified_by=user)
+                      scoped = Client(HTTP_HOST='dashboard-django-test.apps.k8s.gu.se')
+                      scoped.force_login(researcher)
+                      for path in ['/api/omero/filesets?group_id=1', '/api/omero/history?group_id=1', '/api/omero/groups']:
+                          response = scoped.get(path, secure=True)
+                          print('researcher scoped:', path, response.status_code, flush=True)
+                          if response.status_code != 200:
+                              raise RuntimeError('Researcher scope smoke test failed.')
+                          key = 'results' if 'filesets' in path else ('history' if 'history' in path else 'groups')
+                          if response.json()[key]:
+                              raise RuntimeError('Researcher received data outside the test group.')
+                      if scoped.get('/api/omero/admin/policies', secure=True).status_code != 403:
+                          raise RuntimeError('Researcher accessed admin policy data.')
                       transaction.set_rollback(True)
               finally:
                   client.logout()

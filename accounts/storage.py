@@ -7,7 +7,7 @@ class InvalidStorageFilters(ValueError):
     pass
 
 
-def list_filesets(params):
+def list_filesets(params, allowed_group=None):
     try:
         page = int(params.get('page', '1'))
         size = int(params.get('pageSize', '50'))
@@ -28,6 +28,9 @@ def list_filesets(params):
             or imported not in durations or minimum not in sizes or (group != 'all' and (not group.isdecimal() or int(group) > 9223372036854775807))):
         raise InvalidStorageFilters
     conditions, values = [], []
+    if allowed_group is not None:
+        conditions.append('group_id = %s')
+        values.append(allowed_group)
     if status == 'active':
         conditions.append('deleted_at IS NULL')
     elif status == 'deleted':
@@ -59,9 +62,9 @@ def list_filesets(params):
     ]}
 
 
-def list_groups():
+def list_groups(allowed_group=None):
     with connection.cursor() as cursor:
-        cursor.execute('SELECT group_id, MAX(group_name) FROM public.omero_fileset WHERE group_id IS NOT NULL GROUP BY group_id ORDER BY 2, group_id')
+        cursor.execute('SELECT group_id, MAX(group_name) FROM public.omero_fileset WHERE group_id IS NOT NULL' + (' AND group_id = %s' if allowed_group is not None else '') + ' GROUP BY group_id ORDER BY 2, group_id', [allowed_group] if allowed_group is not None else [])
         return [{'id': str(row[0]), 'name': row[1]} for row in cursor.fetchall()]
 
 
@@ -88,3 +91,72 @@ def list_billing(params):
     return {'period': {'from': start.isoformat(), 'to': end.isoformat(), 'inclusive': True}, 'groups': [
         {'group_id': str(row[0]), 'group_name': row[1], 'snapshot_days': row[2], 'billable_gb_days': float(row[3] or 0), 'total_sek': float(row[4] or 0)} for row in rows
     ]}
+
+
+def history(params, allowed_group=None, is_admin=False):
+    period = params.get('period', '30')
+    metric = params.get('metric', 'bytes')
+    group = params.get('group_id', 'all')
+    try:
+        if metric not in (('bytes', 'ore') if is_admin else ('bytes',)):
+            raise ValueError
+        if group != 'all' and (not group.isdecimal() or not 1 <= int(group) <= 9223372036854775807):
+            raise ValueError
+        if period == 'custom':
+            start = date.fromisoformat(params.get('start', ''))
+            end = date.fromisoformat(params.get('end', ''))
+            if start > end or (end - start).days > 3660:
+                raise ValueError
+        else:
+            if period not in ('7', '30', '365'):
+                raise ValueError
+            end = date.today()
+            start = end - timedelta(days=int(period) - 1)
+    except (ValueError, TypeError):
+        raise InvalidStorageFilters from None
+    conditions = ['snapshot_date BETWEEN %s AND %s']
+    values = [start, end]
+    if allowed_group is not None:
+        conditions.append('group_id = %s')
+        values.append(allowed_group)
+    if group != 'all':
+        conditions.append('group_id = %s')
+        values.append(int(group))
+    total = 'SUM(total_bytes)::numeric / 1000000000' if metric == 'bytes' else 'SUM(total_bytes::numeric * rate_ore_per_gb_day / 1000000000)'
+    billable = 'SUM(billable_bytes)::numeric / 1000000000' if metric == 'bytes' else 'SUM(daily_charge_ore)'
+    with connection.cursor() as cursor:
+        cursor.execute(f'SELECT snapshot_date, {total}, {billable} FROM public.group_storage_snapshot WHERE ' + ' AND '.join(conditions) + ' GROUP BY snapshot_date ORDER BY snapshot_date', values)
+        rows = cursor.fetchall()
+    return {'metric': metric, 'history': [{'date': row[0].isoformat(), 'total': float(row[1] or 0), 'billable': float(row[2] or 0)} for row in rows]}
+
+
+def snapshot_overview(is_admin=False):
+    with connection.cursor() as cursor:
+        cursor.execute('''SELECT SUM(fileset_count), SUM(billable_fileset_count),
+            SUM(total_bytes)::numeric / 1000000000,
+            SUM(CASE WHEN policy_type = 'AGREEMENT' THEN billable_bytes ELSE 0 END)::numeric / 1000000000,
+            SUM(CASE WHEN policy_type <> 'AGREEMENT' THEN billable_bytes ELSE 0 END)::numeric / 1000000000,
+            SUM(overdue_fileset_count), SUM(daily_charge_ore)::numeric / 100
+            FROM public.group_storage_snapshot WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM public.group_storage_snapshot)''')
+        row = cursor.fetchone()
+        cursor.execute('''SELECT group_id, group_name, billable_bytes::numeric / 1000000000,
+            GREATEST(total_bytes - billable_bytes, 0)::numeric / 1000000000
+            FROM public.group_storage_snapshot WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM public.group_storage_snapshot)
+            ORDER BY billable_bytes DESC, group_name LIMIT 50''')
+        groups = cursor.fetchall()
+    keys = ('filesets', 'billable_filesets', 'storage_gb', 'agreement_gb', 'non_agreement_gb', 'overdue', 'daily_sek')
+    metrics = {key: float(value or 0) for key, value in zip(keys, row)}
+    if not is_admin:
+        metrics = {key: metrics[key] for key in ('filesets', 'storage_gb')}
+    return {'metrics': metrics, 'groups': [{'id': str(g[0]), 'name': g[1], 'billable': float(g[2] or 0), 'free': float(g[3] or 0)} for g in groups]}
+
+
+def admin_table(kind):
+    queries = {
+        'policies': '''SELECT group_id, group_name, policy_type, grace_days, billing_grace_days, rate_ore_per_gb_day, valid_from, valid_until, notes FROM public.storage_policy ORDER BY group_name, group_id, valid_from DESC''',
+        'health': '''SELECT status, started_at, finished_at, filesets_seen, filesets_inserted, filesets_updated, filesets_marked_deleted, snapshots_written, deletion_suppressed, error_message FROM public.collector_run ORDER BY started_at DESC, run_id DESC LIMIT 50''',
+    }
+    with connection.cursor() as cursor:
+        cursor.execute(queries[kind])
+        names = [column[0] for column in cursor.description]
+        return [dict(zip(names, row)) for row in cursor.fetchall()]

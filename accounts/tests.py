@@ -6,13 +6,66 @@ from django.core.management import call_command, CommandError
 from django.test import Client, TestCase
 from django.urls import reverse
 from allauth.socialaccount.models import SocialAccount
-from .models import AuditEvent, User
+from .models import AuditEvent, User, VerifiedOmeroGroup
 
 
 class AccessTests(TestCase):
     def setUp(self):
         self.admin = User.objects.create_user(username='admin', role=User.Role.ADMIN)
         self.pending = User.objects.create_user(username='pending')
+
+    def test_verified_group_scopes_all_researcher_queries_and_revoke(self):
+        from datetime import timedelta
+        from django.utils import timezone as django_timezone
+        self.pending.role = User.Role.RESEARCHER
+        self.pending.save(update_fields=['role'])
+        self.client.force_login(self.admin)
+        url = reverse('update_omero_group', args=[self.pending.pk])
+        values = {'group_id': '42', 'valid_until': (django_timezone.localdate() + timedelta(days=30)).isoformat(), 'verified': 'yes'}
+        self.assertEqual(self.client.post(url, values).status_code, 302)
+        self.assertTrue(AuditEvent.objects.filter(action='omero_group_verified').exists())
+        self.client.force_login(self.pending)
+        response = self.client.get(reverse('storage'))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'Storage policies')
+        self.assertNotContains(response, 'groupRankingChart')
+        with patch('accounts.storage.connection') as database:
+            cursor = database.cursor.return_value.__enter__.return_value
+            cursor.fetchone.return_value = (0,)
+            cursor.fetchall.return_value = []
+            self.assertEqual(self.client.get(reverse('storage_filesets'), {'group_id': '99'}).status_code, 200)
+            for call in cursor.execute.call_args_list:
+                self.assertIn('group_id = %s', call.args[0])
+                self.assertIn(42, call.args[1])
+            cursor.execute.reset_mock()
+            self.assertEqual(self.client.get(reverse('storage_history'), {'group_id': '99'}).status_code, 200)
+            self.assertIn(42, cursor.execute.call_args.args[1])
+            self.assertEqual(self.client.get(reverse('storage_history'), {'metric': 'ore'}).status_code, 400)
+            self.assertEqual(self.client.get(reverse('storage_overview')).status_code, 403)
+        with patch('accounts.views.connection') as database:
+            database.cursor.return_value.__enter__.return_value.fetchone.return_value = None
+            self.assertEqual(self.client.get(reverse('fileset_detail', args=[123])).status_code, 404)
+            self.assertEqual(database.cursor.return_value.__enter__.return_value.execute.call_args.args[1], [123, 42])
+        self.client.force_login(self.admin)
+        self.client.post(url, {'group_id': ''})
+        self.client.force_login(self.pending)
+        self.assertEqual(self.client.get(reverse('storage_filesets')).status_code, 403)
+
+    def test_expired_group_and_admin_endpoints_fail_closed(self):
+        from datetime import timedelta
+        from django.utils import timezone as django_timezone
+        self.pending.role = User.Role.RESEARCHER
+        self.pending.save(update_fields=['role'])
+        VerifiedOmeroGroup.objects.create(user=self.pending, group_id=42, valid_until=django_timezone.localdate() - timedelta(days=1), verified_by=self.admin)
+        for role in (User.Role.RESEARCHER, User.Role.STAFF):
+            self.pending.role = role
+            self.pending.save(update_fields=['role'])
+            self.client.force_login(self.pending)
+            self.assertEqual(self.client.get(reverse('storage_admin_data', args=['policies'])).status_code, 403)
+            self.assertEqual(self.client.get(reverse('storage_admin_data', args=['health'])).status_code, 403)
+            self.assertEqual(self.client.post(reverse('create_storage_policy'), data='{}', content_type='application/json').status_code, 403)
+            if role == User.Role.RESEARCHER:
+                self.assertEqual(self.client.get(reverse('storage_history')).status_code, 403)
 
     def test_pending_cannot_use_administration_or_approve(self):
         self.client.force_login(self.pending)
@@ -147,6 +200,33 @@ class AccessTests(TestCase):
         self.assertEqual(response.json()['unique_users'], 1)
         self.assertEqual(response.json()['top_scope_files']['name'], 'Scope A')
         self.assertNotContains(response, 'private-user')
+
+    def test_upload_chart_groups_by_scope_and_metric(self):
+        self.client.force_login(self.admin)
+        rows = [
+            ('Scope A', datetime(2026, 1, 3, tzinfo=timezone.utc), 'person', 3, 1024, 120),
+            ('Scope B', datetime(2026, 1, 3, tzinfo=timezone.utc), 'person', 2, 512, 60),
+            ('Scope A', datetime(2026, 1, 4, tzinfo=timezone.utc), 'person', 1, 256, 30),
+        ]
+        with patch('accounts.uploads.connection') as database:
+            cursor = database.cursor.return_value.__enter__.return_value
+            cursor.fetchall.return_value = rows
+            cursor.fetchone.return_value = (1024,)
+            response = self.client.get(reverse('uploads_summary'), {'period': '30', 'metric': 'total_file_size_mb'})
+        self.assertEqual(response.status_code, 200)
+        chart = response.json()['chart_data']
+        self.assertEqual(chart['labels'], ['2026-01-03', '2026-01-04'])
+        self.assertEqual(chart['datasets'][0]['data'], [1.0, 0.25])
+        self.assertEqual(chart['datasets'][1]['data'], [0.5, 0])
+        self.assertEqual(response.json()['period_change'], 75.0)
+        self.assertNotContains(response, 'person')
+
+    def test_upload_scopes_and_chart_are_unavailable_to_researchers(self):
+        self.pending.role = User.Role.RESEARCHER
+        self.pending.save(update_fields=['role'])
+        self.client.force_login(self.pending)
+        self.assertEqual(self.client.get(reverse('upload_scopes')).status_code, 403)
+        self.assertEqual(self.client.get(reverse('uploads_summary'), {'metric': 'total_file_size_mb'}).status_code, 403)
 
     def test_storage_filesets_are_staff_only_and_do_not_offer_price_sorting(self):
         self.pending.role = User.Role.RESEARCHER

@@ -754,6 +754,8 @@ tr.details-open .policy-history-button i {
   margin-bottom: 1rem;
 }
 
+.researcher-storage { grid-template-columns: minmax(0, 1fr); }
+
 .fileset-heading,
 .fileset-filters {
   display: flex;

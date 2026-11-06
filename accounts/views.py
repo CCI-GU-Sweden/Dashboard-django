@@ -4,7 +4,7 @@ from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseForbid
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
 
-from .models import AuditEvent, User
+from .models import AuditEvent, User, VerifiedOmeroGroup
 
 
 def live(request):
@@ -28,6 +28,17 @@ def operational_access(user):
     return user.is_authenticated and user.is_active and user.role in (User.Role.STAFF, User.Role.ADMIN)
 
 
+def storage_scope(user):
+    from django.utils import timezone
+    if operational_access(user):
+        return True, None
+    if user.is_authenticated and user.is_active and user.role == User.Role.RESEARCHER:
+        group = VerifiedOmeroGroup.objects.filter(user=user, valid_until__gte=timezone.localdate()).first()
+        if group:
+            return True, group.group_id
+    return False, None
+
+
 @login_required
 def uploads(request):
     if not operational_access(request.user):
@@ -48,20 +59,33 @@ def uploads_summary(request):
         return JsonResponse({'error': 'Upload data is currently unavailable.'}, status=503)
 
 
+@require_GET
+def upload_scopes(request):
+    if not operational_access(request.user):
+        return JsonResponse({'error': 'Staff access required.'}, status=403)
+    from .uploads import list_scopes
+    try:
+        return JsonResponse(list_scopes(), safe=False)
+    except DatabaseError:
+        return JsonResponse({'error': 'Upload data is currently unavailable.'}, status=503)
+
+
 @login_required
 def storage(request):
-    if not operational_access(request.user):
-        return HttpResponseForbidden('Staff access required.')
+    allowed, _ = storage_scope(request.user)
+    if not allowed:
+        return HttpResponseForbidden('A verified OMERO group is required.')
     return render(request, 'storage.html')
 
 
 @require_GET
 def storage_filesets(request):
-    if not operational_access(request.user):
-        return JsonResponse({'error': 'Staff access required.'}, status=403)
+    allowed, group = storage_scope(request.user)
+    if not allowed:
+        return JsonResponse({'error': 'A verified OMERO group is required.'}, status=403)
     from .storage import InvalidStorageFilters, list_filesets
     try:
-        return JsonResponse(list_filesets(request.GET))
+        return JsonResponse(list_filesets(request.GET, allowed_group=group))
     except InvalidStorageFilters:
         return JsonResponse({'error': 'Invalid fileset filters.'}, status=400)
     except DatabaseError:
@@ -70,19 +94,21 @@ def storage_filesets(request):
 
 @require_GET
 def storage_groups(request):
-    if not operational_access(request.user):
-        return JsonResponse({'error': 'Staff access required.'}, status=403)
+    allowed, group = storage_scope(request.user)
+    if not allowed:
+        return JsonResponse({'error': 'A verified OMERO group is required.'}, status=403)
     from .storage import list_groups
     try:
-        return JsonResponse({'groups': list_groups()})
+        return JsonResponse({'groups': list_groups(group)})
     except DatabaseError:
         return JsonResponse({'error': 'Storage data is currently unavailable.'}, status=503)
 
 
 @require_GET
 def fileset_detail(request, fileset_id):
-    if not operational_access(request.user):
-        return JsonResponse({'error': 'Staff access required.'}, status=403)
+    allowed, group = storage_scope(request.user)
+    if not allowed:
+        return JsonResponse({'error': 'A verified OMERO group is required.'}, status=403)
     if not 1 <= fileset_id <= 9223372036854775807:
         return JsonResponse({'error': 'Fileset not found.'}, status=404)
     try:
@@ -91,13 +117,100 @@ def fileset_detail(request, fileset_id):
                 missing_since_at, missing_runs, deleted_at,
                 COALESCE((SELECT jsonb_agg(entry.value ->> 'name' ORDER BY entry.ordinal)
                     FROM jsonb_array_elements(source_files) WITH ORDINALITY AS entry(value, ordinal)), '[]'::jsonb)
-                FROM public.omero_fileset WHERE fileset_id = %s''', [fileset_id])
+                FROM public.omero_fileset WHERE fileset_id = %s''' + (' AND group_id = %s' if group is not None else ''), [fileset_id] + ([group] if group is not None else []))
             row = cursor.fetchone()
         if not row:
             return JsonResponse({'error': 'Fileset not found.'}, status=404)
         return JsonResponse(dict(zip(('first_seen_at', 'last_seen_at', 'uncontained_image_count', 'missing_since_at', 'missing_runs', 'deleted_at', 'source_file_names'), row)))
     except DatabaseError:
         return JsonResponse({'error': 'Fileset details are currently unavailable.'}, status=503)
+
+
+@require_GET
+def storage_history(request):
+    allowed, group = storage_scope(request.user)
+    if not allowed:
+        return JsonResponse({'error': 'A verified OMERO group is required.'}, status=403)
+    from .storage import history, InvalidStorageFilters
+    try:
+        return JsonResponse(history(request.GET, group, is_dashboard_admin(request.user)))
+    except InvalidStorageFilters:
+        return JsonResponse({'error': 'Invalid history filters.'}, status=400)
+    except DatabaseError:
+        return JsonResponse({'error': 'Storage history is currently unavailable.'}, status=503)
+
+
+@require_GET
+def storage_overview(request):
+    if not operational_access(request.user):
+        return JsonResponse({'error': 'Staff access required.'}, status=403)
+    from .storage import snapshot_overview
+    try:
+        return JsonResponse(snapshot_overview(is_dashboard_admin(request.user)))
+    except DatabaseError:
+        return JsonResponse({'error': 'Storage summary is currently unavailable.'}, status=503)
+
+
+@require_GET
+def storage_admin_data(request, kind):
+    if not is_dashboard_admin(request.user):
+        return JsonResponse({'error': 'Administrator access required.'}, status=403)
+    if kind not in ('policies', 'health'):
+        return JsonResponse({'error': 'Not found.'}, status=404)
+    from .storage import admin_table
+    try:
+        return JsonResponse({'rows': admin_table(kind)})
+    except DatabaseError:
+        return JsonResponse({'error': 'Storage data is currently unavailable.'}, status=503)
+
+
+@require_POST
+def create_storage_policy(request):
+    import json
+    import re
+    from datetime import date, timedelta
+    from django.utils import timezone
+    if not is_dashboard_admin(request.user):
+        return JsonResponse({'error': 'Administrator access required.'}, status=403)
+    try:
+        data = json.loads(request.body)
+        group = str(data['group_id'])
+        policy = data['policy_type']
+        effective = date.fromisoformat(data['valid_from'])
+        billing_grace = str(data['billing_grace_days'])
+        grace = str(data.get('grace_days', ''))
+        rate = str(data.get('rate_ore_per_gb_day', ''))
+        notes = data.get('notes', '').strip()
+        if (not group.isdecimal() or not 1 <= int(group) <= 9223372036854775807 or policy not in ('TEMPORARY', 'AGREEMENT', 'CORE')
+            or effective < timezone.localdate() or not billing_grace.isdecimal() or int(billing_grace) > 3650 or len(notes) > 2000
+            or (policy == 'TEMPORARY' and (not grace.isdecimal() or int(grace) > 36500))
+            or (policy != 'CORE' and not re.fullmatch(r'\d{1,8}(?:\.\d{1,4})?', rate))):
+            raise ValueError
+        grace = int(grace) if policy == 'TEMPORARY' else (0 if policy == 'AGREEMENT' else None)
+        rate = '0' if policy == 'CORE' else rate
+    except (ValueError, KeyError, TypeError, AttributeError, UnicodeDecodeError):
+        return JsonResponse({'error': 'Invalid policy values or effective date.'}, status=400)
+    try:
+        with transaction.atomic():
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT pg_advisory_xact_lock(%s)', [int(group)])
+                cursor.execute('SELECT policy_id, group_name, valid_from, valid_until FROM public.storage_policy WHERE group_id = %s ORDER BY valid_from FOR UPDATE', [int(group)])
+                rows = cursor.fetchall()
+                if not rows:
+                    return JsonResponse({'error': 'No policy history exists for this group.'}, status=404)
+                if any(row[2] == effective for row in rows):
+                    return JsonResponse({'error': 'A policy already starts on this date.'}, status=409)
+                predecessor = next((row for row in reversed(rows) if row[2] < effective), None)
+                successor = next((row for row in rows if row[2] > effective), None)
+                if predecessor:
+                    cursor.execute('UPDATE public.storage_policy SET valid_until = %s, updated_at = now() WHERE policy_id = %s', [effective - timedelta(days=1), predecessor[0]])
+                cursor.execute('''INSERT INTO public.storage_policy (group_id, group_name, policy_type, grace_days, billing_grace_days, rate_ore_per_gb_day, valid_from, valid_until, notes)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING policy_id''', [int(group), rows[-1][1], policy, grace, int(billing_grace), rate, effective, successor[2] - timedelta(days=1) if successor else None, notes or None])
+                policy_id = cursor.fetchone()[0]
+            AuditEvent.objects.create(actor=request.user, target=request.user, action='storage_policy_created', before={'previous_policy_id': predecessor[0] if predecessor else None, 'previous_valid_until': predecessor[3].isoformat() if predecessor and predecessor[3] else None}, after={'policy_id': policy_id, 'group_id': int(group), 'policy_type': policy, 'valid_from': effective.isoformat(), 'grace_days': grace, 'billing_grace_days': int(billing_grace), 'rate': rate, 'notes': notes})
+        return JsonResponse({'policy_id': policy_id}, status=201)
+    except DatabaseError:
+        return JsonResponse({'error': 'Unable to save storage policy.'}, status=503)
 
 
 @login_required
@@ -244,7 +357,41 @@ def is_dashboard_admin(user):
 def administration(request):
     if not is_dashboard_admin(request.user):
         return HttpResponseForbidden('Administrator access required.')
-    return render(request, 'administration.html', {'accounts': User.objects.prefetch_related('socialaccount_set').order_by('date_joined'), 'events': AuditEvent.objects.select_related('actor', 'target').order_by('-created_at')[:100]})
+    return render(request, 'administration.html', {'accounts': User.objects.select_related('verified_omero_group').prefetch_related('socialaccount_set').order_by('date_joined'), 'events': AuditEvent.objects.select_related('actor', 'target').order_by('-created_at')[:100]})
+
+
+@login_required
+@require_POST
+def update_omero_group(request, user_id):
+    from datetime import date, timedelta
+    from django.utils import timezone
+    if not is_dashboard_admin(request.user):
+        return HttpResponseForbidden('Administrator access required.')
+    target = get_object_or_404(User, pk=user_id)
+    group_id = request.POST.get('group_id', '').strip()
+    until = request.POST.get('valid_until', '')
+    if group_id:
+        try:
+            end = date.fromisoformat(until)
+            today = timezone.localdate()
+            if not group_id.isdecimal() or not 1 <= int(group_id) <= 9223372036854775807 or not today <= end <= today + timedelta(days=365) or request.POST.get('verified') != 'yes' or target.role != User.Role.RESEARCHER:
+                raise ValueError
+        except ValueError:
+            return HttpResponseBadRequest('Verify a researcher group and enter a valid review date within one year.')
+    with transaction.atomic():
+        target = User.objects.select_for_update().get(pk=target.pk)
+        if group_id and target.role != User.Role.RESEARCHER:
+            return HttpResponseBadRequest('Only researchers can have a verified OMERO group.')
+        existing = VerifiedOmeroGroup.objects.filter(user=target).first()
+        before = {'group_id': existing.group_id, 'valid_until': existing.valid_until.isoformat()} if existing else {}
+        if group_id:
+            VerifiedOmeroGroup.objects.update_or_create(user=target, defaults={'group_id': int(group_id), 'valid_until': end, 'verified_by': request.user})
+            after = {'group_id': int(group_id), 'valid_until': end.isoformat()}
+        else:
+            VerifiedOmeroGroup.objects.filter(user=target).delete()
+            after = {}
+        AuditEvent.objects.create(actor=request.user, target=target, action='omero_group_verified', before=before, after=after)
+    return redirect('administration')
 
 
 @login_required
@@ -268,6 +415,8 @@ def update_account(request, user_id):
         before = {'role': target.role, 'is_active': target.is_active}
         target.role, target.is_active = role, active == 'yes'
         target.save(update_fields=['role', 'is_active'])
+        if role != User.Role.RESEARCHER or active == 'no':
+            VerifiedOmeroGroup.objects.filter(user=target).delete()
         after = {'role': target.role, 'is_active': target.is_active}
         if before != after:
             AuditEvent.objects.create(actor=actor, target=target, action='account_updated', before=before, after=after)

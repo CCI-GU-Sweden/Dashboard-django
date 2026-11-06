@@ -19,3 +19,11 @@ class AuditEvent(models.Model):
     before = models.JSONField(default=dict)
     after = models.JSONField(default=dict)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class VerifiedOmeroGroup(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='verified_omero_group')
+    group_id = models.PositiveBigIntegerField()
+    valid_until = models.DateField()
+    verified_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name='verified_omero_groups')
+    verified_at = models.DateTimeField(auto_now=True)
