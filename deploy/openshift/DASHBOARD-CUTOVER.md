@@ -64,6 +64,9 @@ GitHub must be able to reach the cluster API and pass its TLS checks. Confirm
 the webhook delivery and a subsequent build from the intended commit; the
 OpenShift trigger alone does not create a GitHub webhook.
 
+For `core-omero-test`, the GitHub webhook was added on 2026-11-09 and GitHub
+reported a successful delivery. Its URL is a credential: do not publish it.
+
 Each successful push produces a candidate image. Verify its source revision and
 retain the digest. Do not enable an automatic deployment trigger because database
 migrations, compatibility and release checks must happen before an image serves
