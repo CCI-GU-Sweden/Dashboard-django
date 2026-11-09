@@ -248,6 +248,16 @@ spec:
                               raise RuntimeError('Researcher received data outside the test group.')
                       if scoped.get('/api/omero/admin/policies', secure=True).status_code != 403:
                           raise RuntimeError('Researcher accessed admin policy data.')
+                      VerifiedOmeroGroup.objects.create(user=researcher, group_id=9223372036854775805, valid_until=date.today() + timedelta(days=1), verified_by=user)
+                      billing = scoped.get('/api/omero/billing?startDate=2000-01-01&endDate=2099-01-01', secure=True)
+                      if billing.status_code != 200 or billing.json()['groups']:
+                          raise RuntimeError('Researcher billing leaked data outside their two verified groups.')
+                      staff_changes = {'version': 2, 'status': 'IN_PROGRESS', 'priority': 'NORMAL', 'assigned_staff': json.dumps([str(user.pk), str(staff_user.pk)])}
+                      assigned = staff_client.patch('/api/tickets/' + staff_ticket.json()['ticket_id'], data=json.dumps(staff_changes), content_type='application/json', secure=True)
+                      detail = staff_client.get('/api/tickets/' + staff_ticket.json()['ticket_id'], secure=True)
+                      if assigned.status_code != 200 or detail.status_code != 200 or len(detail.json()['assigned_staff']) != 2:
+                          raise RuntimeError('Multiple staff assignment failed.')
+                      print('multi-group billing and staff assignment: passed', flush=True)
                       transaction.set_rollback(True)
               finally:
                   client.logout()

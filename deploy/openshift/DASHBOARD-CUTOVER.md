@@ -21,13 +21,25 @@ come from `dashboard-app`, while the existing Django signing key and database
 references remain in place. The local database backup was archived and listed
 successfully; this is not a full restore test.
 
-The deployed image was built in OpenShift build 20 from Git commit `d6018d5`.
+The initial post-cutover image was built in OpenShift build 20 from Git commit `d6018d5`.
 The old deployment still has its original image trigger: ensure it stays scaled
-to zero. The temporary gateway canary and one-off test Jobs are separate
-resources. The `dashboard-django-config` ConfigMap retains sandbox values for
+to zero. The temporary gateway canary and one-off migration Jobs were removed
+after verification. The `dashboard-django-config` ConfigMap retains sandbox values for
 the one-off isolation Job; explicit web-container environment variables override
 the hostnames, ORCID environment and ORCID credentials. Do not remove these
 overrides while production identities are in the database.
+
+On 2026-11-09, build 23 (commit `43343b7`) was promoted after applying
+`accounts.0004` and granting the runtime database role SELECT, INSERT, UPDATE,
+DELETE on `accounts_ticketstaffassignment` and USAGE, SELECT on its ID
+sequence. A fresh database archive was taken first; migration rehearsal was
+rolled back, and separate PostgreSQL storage-scope and application smoke tests
+passed. The group relation now permits more than one row per user. A rollback
+to older code or reversal of the migration is unsafe once multiple memberships
+exist; plan reconciliation and test a restore rather than dropping data. The
+legacy ticket `assigned_to` column stores one representative assignee, while
+the new table stores all selected dashboard staff; older clients cannot show
+all of them.
 
 ## Background and production checklist
 
