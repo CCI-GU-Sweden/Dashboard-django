@@ -1,0 +1,32 @@
+# Replace JOB_NAME and IMAGE_DIGEST. Run only after the application is stopped,
+# the database backup is verified, and the environment still points to sandbox.
+# For a rehearsal, set the command to the rollback-only Python shown in the
+# cutover documentation. This real command changes identity and session rows.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: JOB_NAME
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: identity-cutover
+          image: IMAGE_DIGEST
+          command: ["python", "manage.py", "retire_sandbox_identities", "--confirm-sandbox-cutover"]
+          envFrom:
+            - configMapRef: {name: dashboard-django-config}
+            - secretRef: {name: dashboard-django-app}
+          env:
+            - name: PGHOST
+              valueFrom: {secretKeyRef: {name: filestatistics-app-credentials, key: PGHOST}}
+            - name: PGPORT
+              valueFrom: {secretKeyRef: {name: filestatistics-app-credentials, key: PGPORT}}
+            - name: PGDATABASE
+              valueFrom: {secretKeyRef: {name: filestatistics-app-credentials, key: PGDATABASE}}
+            - name: PGUSER
+              valueFrom: {secretKeyRef: {name: filestatistics-app-credentials, key: PGUSER_DASHBOARD}}
+            - name: PGPASSWORD
+              valueFrom: {secretKeyRef: {name: filestatistics-app-credentials, key: PGPASSWORD_DASHBOARD}}

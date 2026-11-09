@@ -1,0 +1,53 @@
+# Snapshot of the test gateway's three virtual hosts, with only the dashboard
+# upstream and forwarding changed. Review against the current live config before
+# mounting: this shared gateway also serves Flask and OMERO.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: maintenance-nginx-dashboard-django
+data:
+  default.conf: |
+    server {
+        listen 3000;
+        server_name flaskpost.apps.k8s.gu.se;
+        location = /healthz { return 200 "ok"; }
+        error_page 503 /maintenance.html;
+        location = /style.css { root /usr/share/nginx/html; }
+        location /images/ { root /usr/share/nginx/html; }
+        location / {
+            if (-f /etc/nginx/maintenance/flask.flag) { return 503; }
+            client_max_body_size 100G;
+            proxy_pass http://flask-app:5000;
+        }
+        location = /maintenance.html { root /usr/share/nginx/html; internal; }
+    }
+    server {
+        listen 3000;
+        server_name dashboard-test-core-omero-test.apps.k8s.gu.se;
+        location = /healthz { return 200 "ok"; }
+        error_page 503 /maintenance.html;
+        location = /style.css { root /usr/share/nginx/html; }
+        location /images/ { root /usr/share/nginx/html; }
+        location / {
+            if (-f /etc/nginx/maintenance/dashboard.flag) { return 503; }
+            client_max_body_size 2G;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+            proxy_pass http://dashboard-django:80;
+        }
+        location = /maintenance.html { root /usr/share/nginx/html; internal; }
+    }
+    server {
+        listen 3000;
+        server_name omero-web-test.apps.k8s.gu.se;
+        location = /healthz { return 200 "ok"; }
+        error_page 503 /maintenance.html;
+        location = /style.css { root /usr/share/nginx/html; }
+        location /images/ { root /usr/share/nginx/html; }
+        location / {
+            if (-f /etc/nginx/maintenance/omero.flag) { return 503; }
+            client_max_body_size 100G;
+            proxy_pass http://omero-web:4080;
+        }
+        location = /maintenance.html { root /usr/share/nginx/html; internal; }
+    }

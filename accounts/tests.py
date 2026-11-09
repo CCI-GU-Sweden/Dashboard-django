@@ -14,6 +14,35 @@ class AccessTests(TestCase):
         self.admin = User.objects.create_user(username='admin', role=User.Role.ADMIN)
         self.pending = User.objects.create_user(username='pending')
 
+    def test_sandbox_identity_retirement_preserves_links_and_ends_sessions(self):
+        from django.contrib.sessions.models import Session
+        SocialAccount.objects.create(user=self.admin, provider='orcid', uid='0000-0001-2345-6789')
+        SocialAccount.objects.create(user=self.pending, provider='orcid', uid='0000-0001-2345-6797')
+        TicketResearcherLink.objects.create(ticket_id=27, researcher=self.pending)
+        self.client.force_login(self.admin)
+        self.assertTrue(Session.objects.exists())
+        call_command('retire_sandbox_identities', confirm_sandbox_cutover=True, stdout=StringIO())
+        self.assertFalse(Session.objects.exists())
+        self.admin.refresh_from_db()
+        self.assertFalse(self.admin.is_active)
+        self.assertEqual(SocialAccount.objects.filter(provider='orcid-sandbox').count(), 2)
+        self.assertFalse(SocialAccount.objects.filter(provider='orcid').exists())
+        self.assertTrue(TicketResearcherLink.objects.filter(ticket_id=27, researcher=self.pending).exists())
+        self.assertEqual(AuditEvent.objects.filter(action='sandbox_identity_retired').count(), 2)
+        with self.assertRaises(CommandError):
+            call_command('retire_sandbox_identities', confirm_sandbox_cutover=True, stdout=StringIO())
+
+    def test_sandbox_retirement_requires_sandbox_and_confirmation(self):
+        from django.test import override_settings
+        SocialAccount.objects.create(user=self.admin, provider='orcid', uid='0000-0001-2345-6789')
+        with self.assertRaises(CommandError):
+            call_command('retire_sandbox_identities', stdout=StringIO())
+        with override_settings(SOCIALACCOUNT_PROVIDERS={'orcid': {'BASE_DOMAIN': 'orcid.org'}}):
+            with self.assertRaises(CommandError):
+                call_command('retire_sandbox_identities', confirm_sandbox_cutover=True, stdout=StringIO())
+        self.admin.refresh_from_db()
+        self.assertTrue(self.admin.is_active)
+
     def test_storage_overview_card_respects_roles_and_verified_group(self):
         from datetime import date, timedelta
         from django.utils import timezone as django_timezone
