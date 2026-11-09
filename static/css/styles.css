@@ -192,6 +192,22 @@ body {
   color: var(--violet);
 }
 
+.occupancy-icon {
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+
+.metrology-icon {
+  background: var(--teal-soft);
+  color: var(--teal);
+}
+
+.occupancy-icon svg,
+.metrology-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
 .status-badge {
   padding: 0.35rem 0.65rem;
   border-radius: 999px;
