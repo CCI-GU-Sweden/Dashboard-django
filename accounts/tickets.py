@@ -38,6 +38,7 @@ class TicketUpdateForm(forms.Form):
     resolution_note = forms.CharField(max_length=2000, required=False, strip=True)
     issue_type = forms.ChoiceField(required=False, choices=[('', 'Unspecified')] + [(value, value) for value in ('SOFTWARE', 'HARDWARE', 'CONNECTION', 'ACCESS_PERMISSIONS', 'ACQUISITION_IMAGE_QUALITY', 'OTHER')])
     assigned_to = forms.CharField(max_length=30, required=False, strip=True)
+    assigned_staff = forms.CharField(max_length=10000, required=False, strip=True)
 
 
 def validate_images(files):
@@ -77,7 +78,7 @@ def add_images(cursor, ticket_id, images):
 
 
 def update_ticket(ticket_id, form, user, images=None):
-    from .models import User
+    from .models import TicketStaffAssignment, User
     images = images or []
     data = form.cleaned_data
     if not 1 <= ticket_id <= 9223372036854775807:
@@ -93,6 +94,21 @@ def update_ticket(ticket_id, form, user, images=None):
                 raise TicketConflict('This ticket changed since you opened it. Reload before saving.')
             status, priority = data['status'], data['priority']
             assigned = old[4]
+            staff_ids = None
+            old_staff = []
+            if 'assigned_staff' in form.data:
+                try:
+                    selected_staff = json.loads(data['assigned_staff'])
+                    if not isinstance(selected_staff, list) or len(selected_staff) > 100 or any(not isinstance(item, str) or not item.isdecimal() or not 1 <= int(item) <= 9223372036854775807 for item in selected_staff):
+                        raise ValueError
+                    staff_ids = sorted({int(item) for item in selected_staff})
+                except (ValueError, TypeError):
+                    raise InvalidTicketFilters('Select active staff members or administrators.') from None
+                old_staff = sorted(TicketStaffAssignment.objects.filter(ticket_id=ticket_id).values_list('staff_id', flat=True))
+                new_staff = set(staff_ids) - set(old_staff)
+                if User.objects.filter(pk__in=new_staff, is_active=True, role__in=(User.Role.STAFF, User.Role.ADMIN)).count() != len(new_staff):
+                    raise InvalidTicketFilters('Select active staff members or administrators.')
+                assigned = f'dashboard-user:{staff_ids[0]}' if staff_ids else None
             if 'assigned_to' in form.data:
                 selected = data['assigned_to']
                 if selected:
@@ -112,7 +128,7 @@ def update_ticket(ticket_id, form, user, images=None):
             if data['resolution_note'] and not closing:
                 raise InvalidTicketFilters('A closing note can only be added when closing a ticket.')
             resolution = (data['resolution_note'] or None) if closing else (None if reopening else old[2])
-            if status == old[0] and priority == old[1] and assigned == old[4] and issue == old[5] and not data['change_note'] and not images:
+            if status == old[0] and priority == old[1] and assigned == old[4] and issue == old[5] and (staff_ids is None or staff_ids == old_staff) and not data['change_note'] and not images:
                 return {'ticket_id': str(ticket_id), 'version': old[3]}
             if images:
                 cursor.execute('SELECT COUNT(*) FROM public.microscope_ticket_image WHERE ticket_id = %s', [ticket_id])
@@ -126,6 +142,10 @@ def update_ticket(ticket_id, form, user, images=None):
                 [status, priority, assigned, issue, resolution, closing or reopening, resolved_at, actor, ticket_id])
             version = cursor.fetchone()[0]
             changes = {'status': {'before': old[0], 'after': status}, 'priority': {'before': old[1], 'after': priority}, 'resolution_note': {'before': old[2], 'after': resolution}, 'assigned_to': {'before': old[4], 'after': assigned}, 'issue_type': {'before': old[5], 'after': issue}}
+            if staff_ids is not None:
+                TicketStaffAssignment.objects.filter(ticket_id=ticket_id).delete()
+                TicketStaffAssignment.objects.bulk_create([TicketStaffAssignment(ticket_id=ticket_id, staff_id=staff_id) for staff_id in staff_ids])
+                changes['assigned_staff'] = {'before': old_staff, 'after': staff_ids}
             if images:
                 changes['images_added'] = add_images(cursor, ticket_id, images)
             if closing and data['change_note']:
@@ -316,8 +336,12 @@ def list_tickets(params, researcher_id=None):
         count = cursor.fetchone()[0]
         cursor.execute('SELECT ticket_id, reporter_name, microscope, message, status, priority, opened_at, ticket_type, issue_type, assigned_to, resolved_at, updated_at, source, (SELECT count(*) FROM public.microscope_ticket_image i WHERE i.ticket_id = public.microscope_ticket.ticket_id) FROM public.microscope_ticket' + where + ' ORDER BY ' + sorts[sort] + ' ' + order.upper() + ' NULLS LAST, ticket_id DESC LIMIT %s OFFSET %s', values + [size, (page - 1) * size])
         rows = cursor.fetchall()
+    from .models import TicketStaffAssignment
+    assignments = {}
+    for item in TicketStaffAssignment.objects.filter(ticket_id__in=[row[0] for row in rows]).select_related('staff'):
+        assignments.setdefault(item.ticket_id, []).append({'id': str(item.staff_id), 'name': item.staff.get_full_name() or item.staff.username})
     return {'count': count, 'page': page, 'page_size': size, 'results': [
-        {'ticket_id': str(row[0]), 'reporter_name': row[1], 'microscope': row[2], 'message': row[3], 'status': row[4], 'priority': row[5], 'opened_at': row[6], 'ticket_type': row[7], 'issue_type': row[8], 'assigned_to': row[9], 'resolved_at': row[10], 'updated_at': row[11], 'source': row[12], 'image_count': row[13]} for row in rows
+        {'ticket_id': str(row[0]), 'reporter_name': row[1], 'microscope': row[2], 'message': row[3], 'status': row[4], 'priority': row[5], 'opened_at': row[6], 'ticket_type': row[7], 'issue_type': row[8], 'assigned_to': row[9], 'assigned_staff': assignments.get(row[0], []), 'resolved_at': row[10], 'updated_at': row[11], 'source': row[12], 'image_count': row[13]} for row in rows
     ]}
 
 
@@ -382,7 +406,7 @@ def read_researcher_ticket(ticket_id, researcher_id):
 
 
 def read_ticket(ticket_id):
-    from .models import User
+    from .models import TicketStaffAssignment, User
     if not 1 <= ticket_id <= 9223372036854775807:
         return None
     with connection.cursor() as cursor:
@@ -405,6 +429,8 @@ def read_ticket(ticket_id):
             return names.get(int(value.split(':', 1)[1]), 'Former dashboard user')
         return value
     result['assigned_to_name'] = display(result['assigned_to'])
+    result['assigned_staff'] = [{'id': str(item.staff_id), 'name': item.staff.get_full_name() or item.staff.username}
+                                for item in TicketStaffAssignment.objects.filter(ticket_id=ticket_id).select_related('staff')]
     for event in result['events']:
         event['actor'] = display(event['actor'])
     return result

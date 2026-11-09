@@ -23,11 +23,22 @@ class AuditEvent(models.Model):
 
 
 class VerifiedOmeroGroup(models.Model):
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='verified_omero_group')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='omero_group_memberships')
     group_id = models.PositiveBigIntegerField()
     valid_until = models.DateField()
     verified_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name='verified_omero_groups')
     verified_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['user', 'group_id'], name='unique_verified_user_group')]
+
+
+class TicketStaffAssignment(models.Model):
+    ticket_id = models.PositiveBigIntegerField(db_index=True)
+    staff = models.ForeignKey(User, on_delete=models.PROTECT, related_name='ticket_assignments')
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['ticket_id', 'staff'], name='unique_ticket_staff')]
 
 
 class TicketResearcherLink(models.Model):

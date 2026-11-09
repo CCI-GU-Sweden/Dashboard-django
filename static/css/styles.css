@@ -288,6 +288,11 @@ body {
   line-height: 1.65;
 }
 
+#update-assigned[multiple] {
+  height: auto;
+  min-height: 7rem;
+}
+
 .card-link {
   margin-top: auto;
   display: flex;

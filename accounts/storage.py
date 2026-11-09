@@ -14,7 +14,7 @@ def overview_card(allowed_group=None, include_billable=False):
     where = "snapshot_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Stockholm')::date"
     values = []
     if allowed_group is not None:
-        where += ' AND group_id = %s'
+        where += ' AND group_id = ANY(%s)'
         values.append(allowed_group)
     with connection.cursor() as cursor:
         cursor.execute(f'''WITH scoped AS (SELECT {columns} FROM public.group_storage_snapshot WHERE {where}),
@@ -60,7 +60,7 @@ def list_filesets(params, allowed_group=None):
         raise InvalidStorageFilters
     conditions, values = [], []
     if allowed_group is not None:
-        conditions.append('group_id = %s')
+        conditions.append('group_id = ANY(%s)')
         values.append(allowed_group)
     if status == 'active':
         conditions.append('deleted_at IS NULL')
@@ -98,11 +98,11 @@ def list_groups(allowed_group=None):
         cursor.execute('''SELECT group_id, (ARRAY_AGG(group_name ORDER BY source_priority, observed_on DESC NULLS LAST))[1]
             FROM (SELECT group_id, group_name, snapshot_date AS observed_on, 0 AS source_priority FROM public.group_storage_snapshot
                   UNION ALL SELECT group_id, group_name, imported_at::date AS observed_on, 1 AS source_priority FROM public.omero_fileset) groups
-            WHERE group_id IS NOT NULL''' + (' AND group_id = %s' if allowed_group is not None else '') + ' GROUP BY group_id ORDER BY 2, group_id', [allowed_group] if allowed_group is not None else [])
+            WHERE group_id IS NOT NULL''' + (' AND group_id = ANY(%s)' if allowed_group is not None else '') + ' GROUP BY group_id ORDER BY 2, group_id', [allowed_group] if allowed_group is not None else [])
         return [{'id': str(row[0]), 'name': row[1]} for row in cursor.fetchall()]
 
 
-def list_billing(params):
+def list_billing(params, allowed_groups=None):
     try:
         start = date.fromisoformat(params.get('startDate', ''))
         end = date.fromisoformat(params.get('endDate', ''))
@@ -118,9 +118,9 @@ def list_billing(params):
                    SUM(billable_bytes)::numeric / 1000000000,
                    SUM(daily_charge_ore)::numeric / 100
             FROM public.group_storage_snapshot
-            WHERE snapshot_date BETWEEN %s AND %s
+            WHERE snapshot_date BETWEEN %s AND %s''' + (' AND group_id = ANY(%s)' if allowed_groups is not None else '') + '''
             GROUP BY group_id ORDER BY 5 DESC, 2, group_id LIMIT %s
-        ''', [start, end, limit])
+        ''', [start, end] + ([allowed_groups] if allowed_groups is not None else []) + [limit])
         rows = cursor.fetchall()
     return {'period': {'from': start.isoformat(), 'to': end.isoformat(), 'inclusive': True}, 'groups': [
         {'group_id': str(row[0]), 'group_name': row[1], 'snapshot_days': row[2], 'billable_gb_days': float(row[3] or 0), 'total_sek': float(row[4] or 0)} for row in rows
@@ -151,7 +151,7 @@ def history(params, allowed_group=None, is_admin=False):
     conditions = ['snapshot_date BETWEEN %s AND %s']
     values = [start, end]
     if allowed_group is not None:
-        conditions.append('group_id = %s')
+        conditions.append('group_id = ANY(%s)')
         values.append(allowed_group)
     if group != 'all':
         conditions.append('group_id = %s')

@@ -33,10 +33,10 @@
   }).then(data => {
     const names = new Map(data.groups.map(group => [String(group.id), group.name || `Group ${group.id}`]));
     const nameCounts = new Map(); data.groups.forEach(group => {const name = group.name || `Group ${group.id}`; nameCounts.set(name, (nameCounts.get(name) || 0) + 1);});
-    document.querySelectorAll('.group-summary').forEach(summary => {
-      const name = names.get(summary.dataset.groupId);
-      if (name) summary.querySelector('.group-name').textContent = name;
-      else if (summary.dataset.groupId) summary.querySelector('.group-name').textContent = `Group ${summary.dataset.groupId} (not in current inventory)`;
+    document.querySelectorAll('.group-name[data-group-id]').forEach(label => {
+      const name = names.get(label.dataset.groupId);
+      if (name) label.textContent = name;
+      else label.textContent = `Group ${label.dataset.groupId} (not in current inventory)`;
     });
     selects.forEach(select => {
       const current = select.dataset.current;

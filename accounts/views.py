@@ -37,9 +37,9 @@ def storage_scope(user):
     if operational_access(user):
         return True, None
     if user.is_authenticated and user.is_active and user.role == User.Role.RESEARCHER:
-        group = VerifiedOmeroGroup.objects.filter(user=user, valid_until__gte=timezone.localdate()).first()
-        if group:
-            return True, group.group_id
+        groups = list(VerifiedOmeroGroup.objects.filter(user=user, valid_until__gte=timezone.localdate()).values_list('group_id', flat=True))
+        if groups:
+            return True, groups
     return False, None
 
 
@@ -122,7 +122,7 @@ def fileset_detail(request, fileset_id):
                 missing_since_at, missing_runs, deleted_at,
                 COALESCE((SELECT jsonb_agg(entry.value ->> 'name' ORDER BY entry.ordinal)
                     FROM jsonb_array_elements(CASE WHEN jsonb_typeof(source_files) = 'array' THEN source_files ELSE '[]'::jsonb END) WITH ORDINALITY AS entry(value, ordinal)), '[]'::jsonb), locations
-                FROM public.omero_fileset WHERE fileset_id = %s''' + (' AND group_id = %s' if group is not None else ''), [fileset_id] + ([group] if group is not None else []))
+                FROM public.omero_fileset WHERE fileset_id = %s''' + (' AND group_id = ANY(%s)' if group is not None else ''), [fileset_id] + ([group] if group is not None else []))
             row = cursor.fetchone()
         if not row:
             return JsonResponse({'error': 'Fileset not found.'}, status=404)
@@ -268,11 +268,15 @@ def billing(request):
 
 @require_GET
 def billing_summary(request):
-    if not is_dashboard_admin(request.user):
+    researcher = researcher_access(request.user)
+    if not is_dashboard_admin(request.user) and not researcher:
         return JsonResponse({'error': 'Administrator access required.'}, status=403)
+    allowed, groups = storage_scope(request.user)
+    if not allowed:
+        return JsonResponse({'error': 'A verified OMERO group is required.'}, status=403)
     from .storage import InvalidStorageFilters, list_billing
     try:
-        return JsonResponse(list_billing(request.GET))
+        return JsonResponse(list_billing(request.GET, allowed_groups=groups))
     except InvalidStorageFilters:
         return JsonResponse({'error': 'Invalid billing date range.'}, status=400)
     except DatabaseError:
@@ -572,7 +576,7 @@ def is_dashboard_admin(user):
 def administration(request):
     if not is_dashboard_admin(request.user):
         return HttpResponseForbidden('Administrator access required.')
-    return render(request, 'administration.html', {'accounts': User.objects.select_related('verified_omero_group').prefetch_related('socialaccount_set').order_by('date_joined'), 'events': AuditEvent.objects.select_related('actor', 'target').order_by('-created_at')[:100]})
+    return render(request, 'administration.html', {'accounts': User.objects.prefetch_related('omero_group_memberships', 'socialaccount_set').order_by('date_joined'), 'events': AuditEvent.objects.select_related('actor', 'target').order_by('-created_at')[:100]})
 
 
 @login_required
@@ -587,7 +591,8 @@ def update_omero_group(request, user_id):
     target = get_object_or_404(User, pk=user_id)
     group_id = request.POST.get('group_id', '').strip()
     until = request.POST.get('valid_until', '')
-    if group_id:
+    revoke = request.POST.get('action') == 'revoke'
+    if group_id and not revoke:
         try:
             end = date.fromisoformat(until)
             today = timezone.localdate()
@@ -599,13 +604,15 @@ def update_omero_group(request, user_id):
         target = User.objects.select_for_update().get(pk=target.pk)
         if group_id and target.role != User.Role.RESEARCHER:
             return HttpResponseBadRequest('Only researchers can have a verified OMERO group.')
-        existing = VerifiedOmeroGroup.objects.filter(user=target).first()
+        if not group_id or not group_id.isdecimal() or not 1 <= int(group_id) <= 9223372036854775807:
+            return HttpResponseBadRequest('Select a valid group.')
+        existing = VerifiedOmeroGroup.objects.filter(user=target, group_id=int(group_id)).first()
         before = {'group_id': existing.group_id, 'valid_until': existing.valid_until.isoformat()} if existing else {}
-        if group_id:
-            VerifiedOmeroGroup.objects.update_or_create(user=target, defaults={'group_id': int(group_id), 'valid_until': end, 'verified_by': request.user})
+        if not revoke:
+            VerifiedOmeroGroup.objects.update_or_create(user=target, group_id=int(group_id), defaults={'valid_until': end, 'verified_by': request.user})
             after = {'group_id': int(group_id), 'valid_until': end.isoformat()}
         else:
-            VerifiedOmeroGroup.objects.filter(user=target).delete()
+            VerifiedOmeroGroup.objects.filter(user=target, group_id=int(group_id)).delete()
             after = {}
         AuditEvent.objects.create(actor=request.user, target=target, action='omero_group_verified', before=before, after=after)
     return redirect('administration')

@@ -16,7 +16,7 @@
       const data = await get(`/api/omero/history?${query}`);
       const dates = data.history.map(row => row.date);
       const series = (key, name, color) => ({type: 'scatter', mode: 'lines', name, x: dates, y: data.history.map(row => row[key]), line: {color, width: 2}, fill: 'tozeroy', fillcolor: color === '#3273dc' ? 'rgba(50,115,220,.12)' : 'rgba(35,209,160,.12)', hovertemplate: '%{x}<br>%{y:.2f}<extra>%{fullData.name}</extra>'});
-      await Plotly.react('omeroChart', [series('total', 'Total', '#3273dc'), series('billable', 'Billable', '#23d1a0')], {...layout, xaxis: {title: 'Date'}, yaxis: {title: data.metric === 'ore' ? 'Daily charge (öre)' : 'Storage (GB)', rangemode: 'tozero'}}, plotConfig);
+      await Plotly.react('omeroChart', [series('total', 'Total', '#3273dc'), series('billable', 'Billable', '#23d1a0')], {...layout, margin: {l: 85, r: 25, t: 25, b: 80}, xaxis: {title: {text: 'Date'}, automargin: true}, yaxis: {title: {text: data.metric === 'ore' ? 'Daily charge (öre)' : 'Storage (GB)'}, rangemode: 'tozero', automargin: true}}, plotConfig);
       $('history-status').textContent = data.history.length ? '' : 'No storage snapshots for this period.';
     } catch (error) {$('history-status').textContent = error.message;}
   }

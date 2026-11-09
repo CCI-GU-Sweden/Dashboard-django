@@ -61,8 +61,8 @@ class AccessTests(TestCase):
             self.assertEqual(response.json()['metrics']['filesets']['change_percent'], 100.0)
             self.assertEqual(response.json()['metrics']['storage_gb']['value'], 2.0)
             self.assertNotIn('daily_sek', response.json()['metrics'])
-            self.assertEqual(cursor.execute.call_args.args[1], [42])
-            self.assertIn('group_id = %s', cursor.execute.call_args.args[0])
+            self.assertEqual(cursor.execute.call_args.args[1], [[42]])
+            self.assertIn('group_id = ANY(%s)', cursor.execute.call_args.args[0])
             self.assertNotIn('daily_charge_ore', cursor.execute.call_args.args[0])
             page = self.client.get(reverse('home'))
             self.assertContains(page, 'overview-omero-filesets')
@@ -96,6 +96,8 @@ class AccessTests(TestCase):
         url = reverse('update_omero_group', args=[self.pending.pk])
         values = {'group_id': '42', 'valid_until': (django_timezone.localdate() + timedelta(days=30)).isoformat(), 'verified': 'yes'}
         self.assertEqual(self.client.post(url, values).status_code, 302)
+        values['group_id'] = '43'
+        self.assertEqual(self.client.post(url, values).status_code, 302)
         self.assertTrue(AuditEvent.objects.filter(action='omero_group_verified').exists())
         self.client.force_login(self.pending)
         response = self.client.get(reverse('storage'))
@@ -108,19 +110,21 @@ class AccessTests(TestCase):
             cursor.fetchall.return_value = []
             self.assertEqual(self.client.get(reverse('storage_filesets'), {'group_id': '99'}).status_code, 200)
             for call in cursor.execute.call_args_list:
-                self.assertIn('group_id = %s', call.args[0])
-                self.assertIn(42, call.args[1])
+                self.assertIn('group_id = ANY(%s)', call.args[0])
+                self.assertIn([42, 43], call.args[1])
             cursor.execute.reset_mock()
             self.assertEqual(self.client.get(reverse('storage_history'), {'group_id': '99'}).status_code, 200)
-            self.assertIn(42, cursor.execute.call_args.args[1])
+            self.assertIn([42, 43], cursor.execute.call_args.args[1])
             self.assertEqual(self.client.get(reverse('storage_history'), {'metric': 'ore'}).status_code, 400)
             self.assertEqual(self.client.get(reverse('storage_overview')).status_code, 403)
         with patch('accounts.views.connection') as database:
             database.cursor.return_value.__enter__.return_value.fetchone.return_value = None
             self.assertEqual(self.client.get(reverse('fileset_detail', args=[123])).status_code, 404)
-            self.assertEqual(database.cursor.return_value.__enter__.return_value.execute.call_args.args[1], [123, 42])
+            self.assertEqual(database.cursor.return_value.__enter__.return_value.execute.call_args.args[1], [123, [42, 43]])
         self.client.force_login(self.admin)
-        self.client.post(url, {'group_id': ''})
+        self.client.post(url, {'group_id': '42', 'action': 'revoke'})
+        self.assertTrue(VerifiedOmeroGroup.objects.filter(user=self.pending, group_id=43).exists())
+        self.client.post(url, {'group_id': '43', 'action': 'revoke'})
         self.client.force_login(self.pending)
         self.assertEqual(self.client.get(reverse('storage_filesets')).status_code, 403)
 
@@ -132,7 +136,7 @@ class AccessTests(TestCase):
         VerifiedOmeroGroup.objects.create(user=self.pending, group_id=42, valid_until=django_timezone.localdate() + timedelta(days=30), verified_by=self.admin)
         self.client.force_login(self.admin)
         page = self.client.get(reverse('administration'))
-        self.assertContains(page, 'Manage group access')
+        self.assertContains(page, 'Add or renew group access')
         self.assertContains(page, 'class="group-select"')
         self.assertContains(page, 'account-role-filter')
         url = reverse('update_omero_group', args=[self.pending.pk])
@@ -406,6 +410,45 @@ class AccessTests(TestCase):
             database.cursor.return_value.__enter__.return_value.fetchall.return_value = [(1, 'group', 2, 1.25, 3.5)]
             result = self.client.get(reverse('billing_summary'), {'startDate': '2026-02-01', 'endDate': '2026-02-02'})
             self.assertEqual(result.json()['groups'][0]['total_sek'], 3.5)
+
+    def test_researcher_billing_is_limited_to_unexpired_verified_groups(self):
+        from datetime import timedelta
+        from django.utils import timezone as django_timezone
+        self.pending.role = User.Role.RESEARCHER
+        self.pending.save(update_fields=['role'])
+        for group, days in [(42, 10), (43, 30), (44, -1)]:
+            VerifiedOmeroGroup.objects.create(user=self.pending, group_id=group, valid_until=django_timezone.localdate() + timedelta(days=days), verified_by=self.admin)
+        self.client.force_login(self.pending)
+        with patch('accounts.storage.connection') as database:
+            cursor = database.cursor.return_value.__enter__.return_value
+            cursor.fetchall.return_value = [(42, 'Group', 2, 1, 3)]
+            result = self.client.get(reverse('billing_summary'), {'startDate': '2026-02-01', 'endDate': '2026-02-02', 'group_id': '999'})
+            self.assertEqual(result.status_code, 200)
+            self.assertIn('group_id = ANY(%s)', cursor.execute.call_args.args[0])
+            self.assertEqual(cursor.execute.call_args.args[1][2], [42, 43])
+            self.assertNotIn(999, cursor.execute.call_args.args[1])
+        self.assertContains(self.client.get(reverse('storage')), 'Estimated billing for your groups')
+
+    def test_ticket_update_supports_multiple_staff_and_rejects_researchers(self):
+        import json
+        from .models import TicketStaffAssignment
+        staff = User.objects.create_user(username='staff-person', role=User.Role.STAFF)
+        self.pending.role = User.Role.RESEARCHER
+        self.pending.save(update_fields=['role'])
+        self.client.force_login(self.admin)
+        payload = {'version': 1, 'status': 'OPEN', 'priority': 'NORMAL', 'assigned_staff': json.dumps([str(self.admin.pk), str(staff.pk)])}
+        with patch('accounts.tickets.connection') as database:
+            cursor = database.cursor.return_value.__enter__.return_value
+            cursor.fetchone.side_effect = [('OPEN', 'NORMAL', None, 1, None, None), (2,)]
+            result = self.client.patch(reverse('ticket_detail_data', args=[123]), data=json.dumps(payload), content_type='application/json')
+            self.assertEqual(result.status_code, 200, result.content)
+        self.assertEqual(set(TicketStaffAssignment.objects.filter(ticket_id=123).values_list('staff_id', flat=True)), {self.admin.pk, staff.pk})
+        payload['assigned_staff'] = json.dumps([str(self.pending.pk)])
+        with patch('accounts.tickets.connection') as database:
+            database.cursor.return_value.__enter__.return_value.fetchone.return_value = ('OPEN', 'NORMAL', None, 2, None, None)
+            payload['version'] = 2
+            self.assertEqual(self.client.patch(reverse('ticket_detail_data', args=[123]), data=json.dumps(payload), content_type='application/json').status_code, 400)
+        self.assertEqual(TicketStaffAssignment.objects.filter(ticket_id=123).count(), 2)
 
     def test_ticket_detail_and_attachments_deny_unlinked_researchers(self):
         self.pending.role = User.Role.RESEARCHER

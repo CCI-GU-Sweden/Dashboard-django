@@ -21,7 +21,7 @@
   function renderDetails(data, link) {
     const panel = node('div', null, 'ticket-details'); panel.append(node('h3', `Ticket #${data.ticket_id}`, 'title is-5'));
     const grid = node('div', null, 'ticket-detail-grid');
-    for (const [name, value] of [['Original report', data.message], ['Reported by', data.reporter_name], ['Ticket type', friendly(data.ticket_type)], ['Equipment / assigned staff', `${equipmentName(data.microscope)} / ${data.assigned_to_name || assignedName(data.assigned_to)}`], ['Opened / updated (Europe/Stockholm)', `${date(data.opened_at)} / ${date(data.updated_at)}`], ['Closing date', date(data.resolved_at)], ['Resolution / closing note', data.resolution_note || 'No closing note provided']]) field(grid, name, value);
+    for (const [name, value] of [['Original report', data.message], ['Reported by', data.reporter_name], ['Ticket type', friendly(data.ticket_type)], ['Equipment / assigned staff', `${equipmentName(data.microscope)} / ${data.assigned_staff?.length ? data.assigned_staff.map(person => person.name).join(', ') : data.assigned_to_name || assignedName(data.assigned_to)}`], ['Opened / updated (Europe/Stockholm)', `${date(data.opened_at)} / ${date(data.updated_at)}`], ['Closing date', date(data.resolved_at)], ['Resolution / closing note', data.resolution_note || 'No closing note provided']]) field(grid, name, value);
     panel.append(grid);
     const linkBox = node('div', null, 'ticket-researcher-link'); linkBox.append(node('h4', 'Linked researcher', 'title is-6'));
     linkBox.append(node('p', 'Linking allows this researcher to view the ticket report and status.'));
@@ -71,7 +71,7 @@
           catch (error) {status.textContent = error.message;} finally {detail.disabled = false;}
         });
         detailCell.append(detail); row.append(detailCell);
-        const values = [item.ticket_id, date(item.opened_at), item.reporter_name, equipmentName(item.microscope), item.message, `${friendly(item.ticket_type)} / ${friendly(item.priority)}`, friendly(item.issue_type), friendly(item.status), assignedName(item.assigned_to), date(item.resolved_at), item.image_count];
+        const values = [item.ticket_id, date(item.opened_at), item.reporter_name, equipmentName(item.microscope), item.message, `${friendly(item.ticket_type)} / ${friendly(item.priority)}`, friendly(item.issue_type), friendly(item.status), item.assigned_staff?.length ? item.assigned_staff.map(person => person.name).join(', ') : assignedName(item.assigned_to), date(item.resolved_at), item.image_count];
         values.forEach((value, index) => {const cell = document.createElement('td'); if (index === 4) cell.className = 'ticket-message-preview'; if (index === 7) cell.append(node('span', value, `ticket-status ticket-status-${String(item.status || '').toLowerCase().replaceAll('_', '-')}`)); else cell.textContent = value ?? '—'; row.append(cell);});
         const action = document.createElement('td'); action.append(updateButton(item.ticket_id)); row.append(action); body.append(row);
       }
@@ -94,10 +94,13 @@
   function fillUpdate(data, preserveDraft = false) {
     updateTicket = data; $('update-title').textContent = `Update ticket #${data.ticket_id}`; $('update-summary').textContent = `${data.reporter_name} · ${equipmentName(data.microscope)} · Version ${data.version}`;
     updateForm.elements.status.value = data.status; updateForm.elements.priority.value = data.priority; updateForm.elements.issue_type.value = data.issue_type || '';
-    const select = $('update-assigned'); select.replaceChildren(); const empty = node('option', 'Unassigned'); empty.value = ''; select.append(empty);
+    const select = $('update-assigned'); select.replaceChildren();
     staff.forEach((name, id) => {const option = node('option', name); option.value = id; select.append(option);});
-    const assigned = data.assigned_to || ''; const selected = assigned.startsWith('dashboard-user:') ? assigned.slice(15) : '';
-    if (assigned && (!selected || !staff.has(selected))) {const option = node('option', `Keep current: ${data.assigned_to_name || assignedName(assigned)}`); option.value = '__keep__'; select.append(option); select.value = '__keep__';} else select.value = selected;
+    (data.assigned_staff || []).forEach(person => {if (!staff.has(person.id)) {const option = node('option', `${person.name} (inactive)`); option.value = person.id; select.append(option);}});
+    const assigned = data.assigned_to || ''; const legacy = assigned.startsWith('dashboard-user:') ? assigned.slice(15) : '';
+    const selected = new Set(data.assigned_staff?.length ? data.assigned_staff.map(person => person.id) : legacy && staff.has(legacy) ? [legacy] : []);
+    if (assigned && !selected.size && (!legacy || !staff.has(legacy))) {const option = node('option', `Keep current: ${data.assigned_to_name || assignedName(assigned)}`); option.value = '__keep__'; option.selected = true; select.append(option);}
+    [...select.options].forEach(option => {if (selected.has(option.value)) option.selected = true;});
     if (!preserveDraft) {updateForm.elements.change_note.value = ''; updateForm.elements.resolution_note.value = ''; updateForm.elements.images.value = '';}
     $('update-image-help').textContent = `${data.images.length} / 5 images already stored; each image can be at most 5 MiB.`; $('update-error').textContent = '';
   }
@@ -105,7 +108,7 @@
   for (const id of ['close-update', 'cancel-update']) $(id).addEventListener('click', () => updateDialog.close());
   $('reload-update').addEventListener('click', async () => {try {fillUpdate(await details(updateTicket.ticket_id), true);} catch (error) {$('update-error').textContent = error.message;}});
   updateForm.addEventListener('submit', async event => {
-    event.preventDefault(); const button = updateForm.querySelector('[type=submit]'), payload = new FormData(updateForm); payload.set('version', String(updateTicket.version)); omitUnselectedImages(payload); if (payload.get('assigned_to') === '__keep__') payload.delete('assigned_to'); button.disabled = true; $('update-error').textContent = '';
+    event.preventDefault(); const button = updateForm.querySelector('[type=submit]'), payload = new FormData(updateForm); payload.set('version', String(updateTicket.version)); omitUnselectedImages(payload); const selected = [...$('update-assigned').selectedOptions].map(option => option.value); if (!selected.includes('__keep__')) payload.set('assigned_staff', JSON.stringify(selected)); button.disabled = true; $('update-error').textContent = '';
     try {const response = await fetch(`/api/tickets/${encodeURIComponent(updateTicket.ticket_id)}`, {method: 'POST', credentials: 'same-origin', headers: {'X-CSRFToken': updateForm.elements.csrfmiddlewaretoken.value}, body: payload}); await ticketResponse(response); updateDialog.close(); load(); loadSummary();}
     catch (error) {$('update-error').textContent = error.message;} finally {button.disabled = false;}
   });
