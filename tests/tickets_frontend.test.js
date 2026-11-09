@@ -18,7 +18,7 @@ test('ticket list groups equipment, formats codes and loads images only on reque
   const detail = {...item, events: [], images: [{id: '3', filename: 'image.png'}]};
   const requests = [];
   const context = {document: {getElementById: id => elements[id], createElement: element, addEventListener() {}}, URLSearchParams, Intl, Date, setTimeout, crypto: {randomUUID: () => 'test'},
-    fetch: async url => {requests.push(url); return {ok: true, json: async () => url.endsWith('/equipment') ? {equipment: [{id: 'scope', name: 'Microscope A', category: 'Microscope', active: true}]} : url.endsWith('/staff') ? {staff: []} : url.endsWith('/summary') ? {total: 1, active: 1, resolved: 0} : url === '/api/tickets/7' ? detail : {count: 1, page: 1, page_size: 50, results: [item]}};}};
+    fetch: async url => {requests.push(url); return {ok: true, json: async () => url.endsWith('/equipment') ? {equipment: [{id: 'scope', name: 'Microscope A', category: 'Microscope', active: true}]} : url.endsWith('/staff') ? {staff: []} : url.endsWith('/researchers') ? {researchers: []} : url.endsWith('/researcher') ? {researcher_id: null} : url.endsWith('/summary') ? {total: 1, active: 1, resolved: 0} : url === '/api/tickets/7' ? detail : {count: 1, page: 1, page_size: 50, results: [item]}};}};
   vm.runInNewContext(fs.readFileSync('static/js/tickets.js', 'utf8'), context);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(elements.microscope.children[2].tag, 'optgroup');

@@ -5,18 +5,37 @@
   const friendly = value => labels[value] || (value ? String(value).replaceAll('_', ' ').toLowerCase().replace(/^./, c => c.toUpperCase()) : '—');
   const node = (tag, text, className) => {const el = document.createElement(tag); if (text != null) el.textContent = text; if (className) el.className = className; return el;};
   const date = value => value ? new Intl.DateTimeFormat(undefined, {timeZone: 'Europe/Stockholm', dateStyle: 'medium', timeStyle: 'short'}).format(new Date(value)) : '—';
-  let page = 1, submissionId = null, equipment = new Map(), staff = new Map(), updateTicket = null, inventorySequence = 0;
+  let page = 1, submissionId = null, equipment = new Map(), staff = new Map(), researchers = [], updateTicket = null, inventorySequence = 0;
   function equipmentName(value) {return equipment.get(value) || value || 'Facility-wide';}
   function assignedName(value) {if (!value) return 'Unassigned'; return value.startsWith('dashboard-user:') ? staff.get(value.slice(15)) || 'Former staff member' : value;}
   async function read(url) {const response = await fetch(url, {credentials: 'same-origin'}); if (!response.ok) throw new Error('Ticket data is currently unavailable.'); return response.json();}
   async function details(id) {return read(`/api/tickets/${encodeURIComponent(id)}`);}
   function updateButton(id, text = 'Update') {const button = node('button', text, 'button is-small is-light'); button.type = 'button'; button.addEventListener('click', () => openUpdate(id)); return button;}
   function field(container, title, value) {const el = node('div', null, 'ticket-detail-field'); el.append(node('h4', title), node('p', value || '—')); container.append(el);}
-  function renderDetails(data) {
+  function renderDetails(data, link) {
     const panel = node('div', null, 'ticket-details'); panel.append(node('h3', `Ticket #${data.ticket_id}`, 'title is-5'));
     const grid = node('div', null, 'ticket-detail-grid');
     for (const [name, value] of [['Original report', data.message], ['Reported by', data.reporter_name], ['Ticket type', friendly(data.ticket_type)], ['Equipment / assigned staff', `${equipmentName(data.microscope)} / ${data.assigned_to_name || assignedName(data.assigned_to)}`], ['Opened / updated (Europe/Stockholm)', `${date(data.opened_at)} / ${date(data.updated_at)}`], ['Closing date', date(data.resolved_at)], ['Resolution / closing note', data.resolution_note || 'No closing note provided']]) field(grid, name, value);
     panel.append(grid);
+    const linkBox = node('div', null, 'ticket-researcher-link'); linkBox.append(node('h4', 'Linked researcher', 'title is-6'));
+    linkBox.append(node('p', 'Linking allows this researcher to view the ticket report and status.'));
+    const search = document.createElement('input'); search.type = 'search'; search.className = 'input'; search.placeholder = 'Search by name or ORCID'; search.setAttribute('aria-label', 'Search researchers');
+    const select = document.createElement('select'); select.className = 'input'; select.setAttribute('aria-label', 'Linked researcher');
+    const saveLink = node('button', 'Save researcher link', 'button is-small is-light'); saveLink.type = 'button'; const linkStatus = node('p', '', 'ticket-help'); linkStatus.setAttribute('role', 'status');
+    let selected = link.researcher_id || '', expected = link.researcher_id || null;
+    function options() {
+      const query = search.value.trim().toLocaleLowerCase(); select.replaceChildren(); const empty = node('option', 'No researcher'); empty.value = ''; select.append(empty);
+      let selectedFound = false;
+      researchers.forEach(person => {if (person.id !== selected && query && !`${person.name} ${person.orcid}`.toLocaleLowerCase().includes(query)) return; const option = node('option', `${person.name}${person.orcid ? ` · ${person.orcid}` : ''}`); option.value = person.id; select.append(option); if (person.id === selected) selectedFound = true;});
+      if (selected && !selectedFound) {const option = node('option', `Unavailable researcher (ID ${selected})`); option.value = selected; select.append(option);}
+      select.value = selected;
+    }
+    search.addEventListener('input', options); select.addEventListener('change', () => {selected = select.value;}); options();
+    saveLink.addEventListener('click', async () => {saveLink.disabled = true; linkStatus.textContent = '';
+      try {const response = await fetch(`/api/tickets/${encodeURIComponent(data.ticket_id)}/researcher`, {method: 'PATCH', credentials: 'same-origin', headers: {'Content-Type': 'application/json', 'X-CSRFToken': $('update-form').elements.csrfmiddlewaretoken.value}, body: JSON.stringify({researcher_id: selected || null, expected_researcher_id: expected})}); const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Unable to save researcher link.'); expected = result.researcher_id; linkStatus.textContent = 'Researcher link saved.';}
+      catch (error) {linkStatus.textContent = error.message;} finally {saveLink.disabled = false;}
+    });
+    linkBox.append(search, select, saveLink, linkStatus); panel.append(linkBox);
     panel.append(node('h4', `Images (${data.images.length} / 5)`, 'title is-6'));
     if (!data.images.length) panel.append(node('p', 'No images attached.'));
     else {
@@ -42,7 +61,7 @@
         detail.addEventListener('click', async () => {
           if (detail.getAttribute('aria-expanded') === 'true') {row.nextElementSibling.remove(); detail.setAttribute('aria-expanded', 'false'); return;}
           detail.disabled = true;
-          try {const data = await details(item.ticket_id); const expanded = document.createElement('tr'), cell = document.createElement('td'); cell.colSpan = 13; cell.append(renderDetails(data)); expanded.append(cell); row.after(expanded); detail.setAttribute('aria-expanded', 'true');}
+          try {const [data, link] = await Promise.all([details(item.ticket_id), read(`/api/tickets/${encodeURIComponent(item.ticket_id)}/researcher`)]); const expanded = document.createElement('tr'), cell = document.createElement('td'); cell.colSpan = 13; cell.append(renderDetails(data, link)); expanded.append(cell); row.after(expanded); detail.setAttribute('aria-expanded', 'true');}
           catch (error) {status.textContent = error.message;} finally {detail.disabled = false;}
         });
         detailCell.append(detail); row.append(detailCell);
@@ -99,6 +118,6 @@
     }
   }
   document.addEventListener('equipment-changed', async () => {try {const data = await read('/api/tickets/equipment'); fillEquipment(data.equipment); load();} catch {status.textContent = 'Could not refresh equipment. Please reload the page.';}});
-  Promise.all([read('/api/tickets/equipment'), read('/api/tickets/staff')]).then(([equipmentData, staffData]) => {fillEquipment(equipmentData.equipment); staff = new Map(staffData.staff.map(item => [String(item.id), item.name])); load();}).catch(() => {status.textContent = 'Equipment or staff list is unavailable. Please refresh.'; $('add-ticket').disabled = true;});
+  Promise.all([read('/api/tickets/equipment'), read('/api/tickets/staff'), read('/api/tickets/researchers')]).then(([equipmentData, staffData, researcherData]) => {fillEquipment(equipmentData.equipment); staff = new Map(staffData.staff.map(item => [String(item.id), item.name])); researchers = researcherData.researchers; load();}).catch(() => {status.textContent = 'Equipment or staff list is unavailable. Please refresh.'; $('add-ticket').disabled = true;});
   loadSummary();
 })();

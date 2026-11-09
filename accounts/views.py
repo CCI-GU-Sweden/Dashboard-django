@@ -4,7 +4,7 @@ from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseForbid
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
 
-from .models import AuditEvent, User, VerifiedOmeroGroup
+from .models import AuditEvent, TicketResearcherLink, User, VerifiedOmeroGroup
 
 
 def live(request):
@@ -26,6 +26,10 @@ def home(request):
 
 def operational_access(user):
     return user.is_authenticated and user.is_active and user.role in (User.Role.STAFF, User.Role.ADMIN)
+
+
+def researcher_access(user):
+    return user.is_authenticated and user.is_active and user.role == User.Role.RESEARCHER
 
 
 def storage_scope(user):
@@ -277,6 +281,8 @@ def billing_summary(request):
 
 @login_required
 def tickets(request):
+    if researcher_access(request.user):
+        return render(request, 'researcher_tickets.html')
     if not operational_access(request.user):
         return HttpResponseForbidden('Staff access required.')
     return render(request, 'tickets.html')
@@ -284,8 +290,11 @@ def tickets(request):
 
 @require_http_methods(['GET', 'POST'])
 def ticket_inventory(request):
-    if not operational_access(request.user):
+    researcher = researcher_access(request.user)
+    if not operational_access(request.user) and not researcher:
         return JsonResponse({'error': 'Staff access required.'}, status=403)
+    if researcher and request.method == 'POST' and not request.user.can_create_tickets:
+        return JsonResponse({'error': 'Ticket creation is not enabled for this account.'}, status=403)
     from .tickets import InvalidTicketFilters, TicketConflict, TicketCreateForm, create_ticket, list_tickets, validate_images
     try:
         if request.method == 'POST':
@@ -305,12 +314,18 @@ def ticket_inventory(request):
             allowed = set(TicketCreateForm.base_fields)
             if not isinstance(data, dict) or set(data) - allowed:
                 return JsonResponse({'error': 'Invalid ticket data.'}, status=400)
+            if researcher and data.get('ticket_type') not in ('USER_REQUEST', 'USER_REPORT'):
+                return JsonResponse({'error': 'Choose a researcher ticket type.'}, status=400)
             form = TicketCreateForm(data)
             if not form.is_valid():
                 return JsonResponse({'error': 'Check the ticket fields.', 'fields': form.errors.get_json_data()}, status=400)
             result, created = create_ticket(form, request.user, images)
             return JsonResponse(result, status=201 if created else 200)
-        return JsonResponse(list_tickets(request.GET))
+        result = list_tickets(request.GET, researcher_id=request.user.pk if researcher else None)
+        if researcher:
+            fields = ('ticket_id', 'microscope', 'message', 'status', 'opened_at', 'updated_at', 'resolved_at', 'ticket_type')
+            result['results'] = [{key: item[key] for key in fields} for item in result['results']]
+        return JsonResponse(result)
     except InvalidTicketFilters as exc:
         if request.method == 'POST':
             return JsonResponse({'error': str(exc) or 'Invalid ticket data.'}, status=400)
@@ -323,11 +338,11 @@ def ticket_inventory(request):
 
 @require_GET
 def ticket_equipment(request):
-    if not operational_access(request.user):
+    if not operational_access(request.user) and not researcher_access(request.user):
         return JsonResponse({'error': 'Staff access required.'}, status=403)
     from .tickets import list_equipment
     try:
-        return JsonResponse({'equipment': list_equipment(include_inactive=True)})
+        return JsonResponse({'equipment': list_equipment(include_inactive=operational_access(request.user))})
     except DatabaseError:
         return JsonResponse({'error': 'Equipment is currently unavailable.'}, status=503)
 
@@ -383,12 +398,72 @@ def ticket_staff(request):
 
 
 @require_GET
-def ticket_summary(request):
+def ticket_researchers(request):
     if not operational_access(request.user):
+        return JsonResponse({'error': 'Staff access required.'}, status=403)
+    users = User.objects.filter(is_active=True, role=User.Role.RESEARCHER).prefetch_related('socialaccount_set').order_by('first_name', 'last_name', 'username')
+    return JsonResponse({'researchers': [{'id': str(person.pk), 'name': person.get_full_name() or person.username,
+        'orcid': next((identity.uid for identity in person.socialaccount_set.all() if identity.provider == 'orcid'), '')} for person in users]})
+
+
+@require_http_methods(['GET', 'PATCH'])
+def ticket_researcher_link(request, ticket_id):
+    import json
+    if not operational_access(request.user):
+        return JsonResponse({'error': 'Staff access required.'}, status=403)
+    if not 1 <= ticket_id <= 9223372036854775807:
+        return JsonResponse({'error': 'Ticket not found.'}, status=404)
+    try:
+        if request.method == 'GET':
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT 1 FROM public.microscope_ticket WHERE ticket_id = %s', [ticket_id])
+                if not cursor.fetchone():
+                    return JsonResponse({'error': 'Ticket not found.'}, status=404)
+            link = TicketResearcherLink.objects.filter(ticket_id=ticket_id).first()
+            return JsonResponse({'researcher_id': str(link.researcher_id) if link else None})
+        try:
+            payload = json.loads(request.body)
+        except (ValueError, UnicodeDecodeError):
+            return JsonResponse({'error': 'Invalid researcher link.'}, status=400)
+        if not isinstance(payload, dict) or set(payload) != {'researcher_id', 'expected_researcher_id'}:
+            return JsonResponse({'error': 'Invalid researcher link.'}, status=400)
+        def valid_id(value):
+            return value is None or (isinstance(value, str) and value.isdecimal() and len(value) <= 19 and 1 <= int(value) <= 9223372036854775807)
+        chosen, expected = payload['researcher_id'], payload['expected_researcher_id']
+        if not valid_id(chosen) or not valid_id(expected):
+            return JsonResponse({'error': 'Invalid researcher link.'}, status=400)
+        with transaction.atomic():
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT ticket_id FROM public.microscope_ticket WHERE ticket_id = %s FOR UPDATE', [ticket_id])
+                if not cursor.fetchone():
+                    return JsonResponse({'error': 'Ticket not found.'}, status=404)
+            existing = TicketResearcherLink.objects.filter(ticket_id=ticket_id).first()
+            previous = str(existing.researcher_id) if existing else None
+            if previous != expected:
+                return JsonResponse({'error': 'This ticket link changed. Reload its details before saving.'}, status=409)
+            target = None
+            if chosen:
+                target = User.objects.select_for_update().filter(pk=int(chosen), is_active=True, role=User.Role.RESEARCHER).first()
+                if not target:
+                    return JsonResponse({'error': 'Select an active researcher account.'}, status=400)
+                TicketResearcherLink.objects.update_or_create(ticket_id=ticket_id, defaults={'researcher': target})
+            elif existing:
+                existing.delete()
+            if previous != chosen:
+                AuditEvent.objects.create(actor=request.user, target=target or request.user, action='ticket_researcher_linked', before={'ticket_id': str(ticket_id), 'researcher_id': previous}, after={'ticket_id': str(ticket_id), 'researcher_id': chosen})
+        return JsonResponse({'researcher_id': chosen})
+    except DatabaseError:
+        return JsonResponse({'error': 'Ticket link is currently unavailable.'}, status=503)
+
+
+@require_GET
+def ticket_summary(request):
+    researcher = researcher_access(request.user)
+    if not operational_access(request.user) and not researcher:
         return JsonResponse({'error': 'Staff access required.'}, status=403)
     from .tickets import ticket_summary as get_summary
     try:
-        return JsonResponse(get_summary())
+        return JsonResponse(get_summary(researcher_id=request.user.pk if researcher else None))
     except DatabaseError:
         return JsonResponse({'error': 'Tickets are currently unavailable.'}, status=503)
 
@@ -402,6 +477,15 @@ def ticket_detail(request, ticket_id):
 
 @require_http_methods(['GET', 'PATCH', 'POST'])
 def ticket_detail_data(request, ticket_id):
+    if researcher_access(request.user) and request.method == 'GET':
+        from .tickets import read_researcher_ticket
+        if not 1 <= ticket_id <= 9223372036854775807:
+            return JsonResponse({'error': 'Ticket not found.'}, status=404)
+        try:
+            result = read_researcher_ticket(ticket_id, request.user.pk)
+            return JsonResponse(result) if result else JsonResponse({'error': 'Ticket not found.'}, status=404)
+        except DatabaseError:
+            return JsonResponse({'error': 'Ticket data is currently unavailable.'}, status=503)
     if not operational_access(request.user):
         return JsonResponse({'error': 'Staff access required.'}, status=403)
     from .tickets import InvalidTicketFilters, TicketConflict, TicketUpdateForm, read_ticket, update_ticket, validate_images
@@ -439,13 +523,20 @@ def ticket_detail_data(request, ticket_id):
 
 @require_GET
 def ticket_image(request, ticket_id, image_id):
-    if not operational_access(request.user):
+    researcher = researcher_access(request.user)
+    if not operational_access(request.user) and not researcher:
         return HttpResponseForbidden('Staff access required.')
     if not 1 <= ticket_id <= 9223372036854775807 or not 1 <= image_id <= 9223372036854775807:
         return HttpResponse(status=404)
     try:
         with connection.cursor() as cursor:
-            cursor.execute('SELECT image_data, extension FROM public.microscope_ticket_image WHERE ticket_id = %s AND image_id = %s', [ticket_id, image_id])
+            query = 'SELECT image_data, extension FROM public.microscope_ticket_image WHERE ticket_id = %s AND image_id = %s'
+            values = [ticket_id, image_id]
+            if researcher:
+                query += ''' AND EXISTS (SELECT 1 FROM public.microscope_ticket t JOIN public.accounts_ticketresearcherlink l ON l.ticket_id = t.ticket_id
+                    WHERE t.ticket_id = %s AND l.researcher_id = %s AND t.created_by = %s)'''
+                values += [ticket_id, request.user.pk, f'dashboard-user:{request.user.pk}']
+            cursor.execute(query, values)
             row = cursor.fetchone()
     except DatabaseError:
         return HttpResponse('Image unavailable.', status=503)
@@ -511,7 +602,8 @@ def update_account(request, user_id):
         return HttpResponseForbidden('Administrator access required.')
     role = request.POST.get('role', '')
     active = request.POST.get('active')
-    if role not in {'', *User.Role.values} or active not in {'yes', 'no'}:
+    ticket_permission = request.POST.get('can_create_tickets', '')
+    if role not in {'', *User.Role.values} or active not in {'yes', 'no'} or ticket_permission not in {'', 'yes'}:
         return HttpResponseBadRequest('Invalid account settings.')
     with transaction.atomic():
         # Serialize concurrent attempts to remove the last admin.
@@ -522,12 +614,13 @@ def update_account(request, user_id):
         target = get_object_or_404(User.objects.select_for_update(), pk=user_id)
         if target.role == User.Role.ADMIN and target.is_active and (role != User.Role.ADMIN or active == 'no') and User.objects.filter(role=User.Role.ADMIN, is_active=True).count() <= 1:
             return HttpResponseBadRequest('The last active administrator cannot be removed.')
-        before = {'role': target.role, 'is_active': target.is_active}
+        before = {'role': target.role, 'is_active': target.is_active, 'can_create_tickets': target.can_create_tickets}
         target.role, target.is_active = role, active == 'yes'
-        target.save(update_fields=['role', 'is_active'])
+        target.can_create_tickets = role == User.Role.RESEARCHER and active == 'yes' and ticket_permission == 'yes'
+        target.save(update_fields=['role', 'is_active', 'can_create_tickets'])
         if role != User.Role.RESEARCHER or active == 'no':
             VerifiedOmeroGroup.objects.filter(user=target).delete()
-        after = {'role': target.role, 'is_active': target.is_active}
+        after = {'role': target.role, 'is_active': target.is_active, 'can_create_tickets': target.can_create_tickets}
         if before != after:
             AuditEvent.objects.create(actor=actor, target=target, action='account_updated', before=before, after=after)
     return redirect('administration')

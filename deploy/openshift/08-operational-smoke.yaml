@@ -160,6 +160,35 @@ spec:
                           raise RuntimeError('Researcher group selector is missing.')
                       scoped = Client(HTTP_HOST='dashboard-django-test.apps.k8s.gu.se')
                       scoped.force_login(researcher)
+                      own_summary = scoped.get('/api/tickets/summary', secure=True)
+                      if own_summary.status_code != 200 or own_summary.json()['total'] != 0:
+                          raise RuntimeError('Unlinked researcher ticket summary leaked data.')
+                      if scoped.get('/api/tickets/' + uploaded_id, secure=True).status_code != 404:
+                          raise RuntimeError('Unlinked researcher accessed a ticket.')
+                      link_body = {'researcher_id': str(researcher.pk), 'expected_researcher_id': None}
+                      link_result = client.patch('/api/tickets/' + uploaded_id + '/researcher', data=json.dumps(link_body), content_type='application/json', secure=True)
+                      print('researcher ticket link:', link_result.status_code, flush=True)
+                      if link_result.status_code != 200:
+                          raise RuntimeError('Manual researcher ticket link failed.')
+                      linked_detail = scoped.get('/api/tickets/' + uploaded_id, secure=True)
+                      linked_summary = scoped.get('/api/tickets/summary', secure=True)
+                      if linked_detail.status_code != 200 or 'events' in linked_detail.json() or linked_detail.json()['images'] or linked_summary.json()['total'] != 1:
+                          raise RuntimeError('Linked researcher ticket scope failed.')
+                      if scoped.get('/api/tickets/' + uploaded_id + '/images/' + image_id, secure=True).status_code != 404:
+                          raise RuntimeError('Researcher accessed a staff ticket image.')
+                      researcher_payload = {'reporter_name': 'Researcher', 'reporter_identifier': 'r@example.org', 'microscope': '', 'message': 'Temporary researcher ticket', 'ticket_type': 'USER_REQUEST', 'issue_type': '', 'priority': 'NORMAL', 'source_event_id': str(uuid.uuid4())}
+                      if scoped.post('/api/tickets', data=json.dumps(researcher_payload), content_type='application/json', secure=True).status_code != 403:
+                          raise RuntimeError('Researcher bypassed ticket creation permission.')
+                      User.objects.filter(pk=researcher.pk).update(can_create_tickets=True)
+                      created_own = scoped.post('/api/tickets', data=json.dumps(researcher_payload), content_type='application/json', secure=True)
+                      print('researcher ticket creation:', created_own.status_code, flush=True)
+                      if created_own.status_code != 201 or scoped.get('/api/tickets/summary', secure=True).json()['total'] != 2:
+                          raise RuntimeError('Researcher self-linked creation failed.')
+                      other = User.objects.create_user(username='smoke-other-' + uuid.uuid4().hex, role=User.Role.RESEARCHER)
+                      other_client = Client(HTTP_HOST='dashboard-django-test.apps.k8s.gu.se')
+                      other_client.force_login(other)
+                      if other_client.get('/api/tickets/' + created_own.json()['ticket_id'], secure=True).status_code != 404 or other_client.get('/api/tickets/summary', secure=True).json()['total'] != 0:
+                          raise RuntimeError('Another researcher accessed linked tickets.')
                       card = scoped.get('/api/omero/overview-card?group_id=1', secure=True)
                       if card.status_code != 200 or card.json()['snapshot_date'] is not None or 'daily_sek' in card.json()['metrics']:
                           raise RuntimeError('Researcher overview is not correctly scoped.')

@@ -141,6 +141,7 @@ def update_ticket(ticket_id, form, user, images=None):
 
 
 def create_ticket(form, user, images=None):
+    from .models import AuditEvent, TicketResearcherLink, User
     images = images or []
     values = form.cleaned_data
     actor = f'dashboard-user:{user.pk}'
@@ -151,6 +152,10 @@ def create_ticket(form, user, images=None):
         hash_payload['images'] = [[image['filename'], hashlib.sha256(image['data']).hexdigest()] for image in images]
     request_hash = hashlib.sha256(json.dumps(hash_payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     with transaction.atomic():
+        if user.role == User.Role.RESEARCHER:
+            locked_user = User.objects.select_for_update().get(pk=user.pk)
+            if not locked_user.is_active or locked_user.role != User.Role.RESEARCHER or not locked_user.can_create_tickets:
+                raise InvalidTicketFilters('Ticket creation is not enabled for this account.')
         with connection.cursor() as cursor:
             if fields['microscope']:
                 cursor.execute('SELECT active FROM public.ticket_equipment WHERE equipment_id = %s FOR SHARE', [fields['microscope']])
@@ -174,6 +179,9 @@ def create_ticket(form, user, images=None):
                     raise TicketConflict('This submission has already been used with different data.')
                 return {'ticket_id': str(existing[0]), 'version': existing[1]}, False
             metadata = add_images(cursor, inserted[0], images)
+            if user.role == User.Role.RESEARCHER:
+                TicketResearcherLink.objects.create(ticket_id=inserted[0], researcher=user)
+                AuditEvent.objects.create(actor=user, target=user, action='ticket_researcher_linked', before={}, after={'ticket_id': str(inserted[0]), 'researcher_id': user.pk})
             cursor.execute('''INSERT INTO public.microscope_ticket_event
                 (ticket_id, event_type, old_status, new_status, note, changes, actor)
                 VALUES (%s, 'CREATED', NULL, 'OPEN', NULL, %s::jsonb, %s)''',
@@ -230,7 +238,7 @@ def save_equipment(form, actor, equipment_id=None, expected=None, active=True):
     return {'id': equipment_id, **after}
 
 
-def list_tickets(params):
+def list_tickets(params, researcher_id=None):
     try:
         page = int(params.get('page', '1'))
         size = int(params.get('pageSize', '50'))
@@ -254,6 +262,9 @@ def list_tickets(params):
             or date_field not in ('opened_at', 'updated_at', 'resolved_at')):
         raise InvalidTicketFilters
     conditions, values = [], []
+    if researcher_id is not None:
+        conditions.append('ticket_id IN (SELECT ticket_id FROM public.accounts_ticketresearcherlink WHERE researcher_id = %s)')
+        values.append(researcher_id)
     if statuses:
         conditions.append('status IN (' + ','.join(['%s'] * len(statuses)) + ')')
         values.extend(statuses)
@@ -310,26 +321,62 @@ def list_tickets(params):
     ]}
 
 
-def ticket_summary():
+def ticket_summary(researcher_id=None):
     with connection.cursor() as cursor:
+        restriction = ' WHERE ticket_id IN (SELECT ticket_id FROM public.accounts_ticketresearcherlink WHERE researcher_id = %s)' if researcher_id is not None else ''
         cursor.execute('''
-            WITH clock AS (SELECT now() AS current_time, now() - interval '30 days' AS cutoff),
+            WITH scoped AS (SELECT * FROM public.microscope_ticket''' + restriction + '''),
+            clock AS (SELECT now() AS current_time, now() - interval '30 days' AS cutoff, now() - interval '60 days' AS earlier),
+            historical AS (
+                SELECT t.*, COALESCE(h.new_status, CASE WHEN t.updated_at <= c.cutoff THEN t.status END) AS previous_status
+                FROM scoped t CROSS JOIN clock c LEFT JOIN LATERAL (
+                    SELECT e.new_status FROM public.microscope_ticket_event e
+                    WHERE e.ticket_id = t.ticket_id AND e.occurred_at <= c.cutoff AND e.new_status IS NOT NULL
+                    ORDER BY e.occurred_at DESC, e.event_id DESC LIMIT 1
+                ) h ON true
+            ),
             resolutions AS (
-                SELECT ticket_id, occurred_at AS resolved_time FROM public.microscope_ticket_event
-                WHERE new_status = 'RESOLVED' AND old_status IS DISTINCT FROM 'RESOLVED'
+                SELECT e.ticket_id, e.occurred_at AS resolved_time FROM public.microscope_ticket_event e
+                JOIN scoped t ON t.ticket_id = e.ticket_id
+                WHERE e.new_status = 'RESOLVED' AND e.old_status IS DISTINCT FROM 'RESOLVED'
                 UNION ALL
-                SELECT t.ticket_id, t.resolved_at FROM public.microscope_ticket t
+                SELECT t.ticket_id, t.resolved_at FROM scoped t
                 WHERE t.resolved_at IS NOT NULL AND NOT EXISTS (
                     SELECT 1 FROM public.microscope_ticket_event e WHERE e.ticket_id = t.ticket_id AND e.new_status = 'RESOLVED'
                 )
             )
             SELECT COUNT(*) FILTER (WHERE t.opened_at <= c.current_time),
+                   COUNT(*) FILTER (WHERE t.opened_at <= c.cutoff),
                    COUNT(*) FILTER (WHERE t.status IN ('OPEN','IN_PROGRESS','WAITING')),
-                   (SELECT COUNT(DISTINCT r.ticket_id) FROM resolutions r WHERE r.resolved_time > c.cutoff AND r.resolved_time <= c.current_time)
-            FROM clock c LEFT JOIN public.microscope_ticket t ON true GROUP BY c.cutoff, c.current_time
-        ''')
-        total, active, resolved = cursor.fetchone()
-    return {'total': total, 'active': active, 'resolved': resolved}
+                   CASE WHEN COUNT(*) FILTER (WHERE t.opened_at <= c.cutoff AND t.previous_status IS NULL) > 0 THEN NULL
+                        ELSE COUNT(*) FILTER (WHERE t.opened_at <= c.cutoff AND t.previous_status IN ('OPEN','IN_PROGRESS','WAITING')) END,
+                   (SELECT COUNT(DISTINCT r.ticket_id) FROM resolutions r WHERE r.resolved_time > c.cutoff AND r.resolved_time <= c.current_time),
+                   (SELECT COUNT(DISTINCT r.ticket_id) FROM resolutions r WHERE r.resolved_time > c.earlier AND r.resolved_time <= c.cutoff)
+            FROM clock c LEFT JOIN historical t ON true GROUP BY c.cutoff, c.current_time, c.earlier
+        ''', [researcher_id] if researcher_id is not None else [])
+        total, previous_total, active, previous_active, resolved, previous_resolved = cursor.fetchone()
+    return {'total': total, 'active': active, 'resolved': resolved,
+            'changes': {'total': total - previous_total, 'active': active - previous_active if previous_active is not None else None,
+                        'resolved': resolved - previous_resolved}}
+
+
+def read_researcher_ticket(ticket_id, researcher_id):
+    with connection.cursor() as cursor:
+        cursor.execute('''SELECT t.ticket_id, t.reporter_name, t.microscope, t.message, t.ticket_type, t.status,
+            t.opened_at, t.resolved_at, t.updated_at, t.created_by
+            FROM public.microscope_ticket t JOIN public.accounts_ticketresearcherlink l ON l.ticket_id = t.ticket_id
+            WHERE t.ticket_id = %s AND l.researcher_id = %s''', [ticket_id, researcher_id])
+        row = cursor.fetchone()
+        if not row:
+            return None
+        keys = ('ticket_id', 'reporter_name', 'microscope', 'message', 'ticket_type', 'status', 'opened_at', 'resolved_at', 'updated_at', 'created_by')
+        result = dict(zip(keys, row))
+        result['ticket_id'] = str(result['ticket_id'])
+        result['images'] = []
+        if result.pop('created_by') == f'dashboard-user:{researcher_id}':
+            cursor.execute('SELECT image_id, filename FROM public.microscope_ticket_image WHERE ticket_id = %s ORDER BY image_id LIMIT 5', [ticket_id])
+            result['images'] = [{'id': str(image[0]), 'filename': image[1]} for image in cursor.fetchall()]
+        return result
 
 
 def read_ticket(ticket_id):

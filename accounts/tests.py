@@ -6,7 +6,7 @@ from django.core.management import call_command, CommandError
 from django.test import Client, TestCase
 from django.urls import reverse
 from allauth.socialaccount.models import SocialAccount
-from .models import AuditEvent, User, VerifiedOmeroGroup
+from .models import AuditEvent, TicketResearcherLink, User, VerifiedOmeroGroup
 
 
 class AccessTests(TestCase):
@@ -337,14 +337,19 @@ class AccessTests(TestCase):
             self.assertEqual(response.json()['results'][0]['fileset_id'], '7')
             self.assertNotContains(response, 'daily_charge')
 
-    def test_ticket_inventory_denies_researchers_and_is_read_only(self):
+    def test_ticket_inventory_scopes_researchers_and_denies_unapproved_creation(self):
         self.pending.role = User.Role.RESEARCHER
         self.pending.save(update_fields=['role'])
         self.client.force_login(self.pending)
         with patch('accounts.tickets.connection') as database:
-            self.assertEqual(self.client.get(reverse('tickets')).status_code, 403)
-            self.assertEqual(self.client.get(reverse('ticket_inventory')).status_code, 403)
-            database.cursor.assert_not_called()
+            self.assertEqual(self.client.get(reverse('tickets')).status_code, 200)
+            cursor = database.cursor.return_value.__enter__.return_value
+            cursor.fetchone.return_value = (0,)
+            cursor.fetchall.return_value = []
+            self.assertEqual(self.client.get(reverse('ticket_inventory')).status_code, 200)
+            self.assertIn(self.pending.pk, cursor.execute.call_args_list[0].args[1])
+            self.assertEqual(self.client.post(reverse('ticket_inventory'), data='{}', content_type='application/json').status_code, 403)
+            database.reset_mock()
             self.pending.role = User.Role.STAFF
             self.pending.save(update_fields=['role'])
             self.assertEqual(self.client.post(reverse('ticket_inventory'), data='{}', content_type='application/json').status_code, 400)
@@ -373,15 +378,18 @@ class AccessTests(TestCase):
             result = self.client.get(reverse('billing_summary'), {'startDate': '2026-02-01', 'endDate': '2026-02-02'})
             self.assertEqual(result.json()['groups'][0]['total_sek'], 3.5)
 
-    def test_ticket_detail_and_attachments_deny_researchers(self):
+    def test_ticket_detail_and_attachments_deny_unlinked_researchers(self):
         self.pending.role = User.Role.RESEARCHER
         self.pending.save(update_fields=['role'])
         self.client.force_login(self.pending)
-        with patch('accounts.tickets.connection') as database:
+        with patch('accounts.tickets.connection') as database, patch('accounts.views.connection') as view_database:
+            database.cursor.return_value.__enter__.return_value.fetchone.return_value = None
+            view_database.cursor.return_value.__enter__.return_value.fetchone.return_value = None
             self.assertEqual(self.client.get(reverse('ticket_detail', args=[1])).status_code, 403)
-            self.assertEqual(self.client.get(reverse('ticket_detail_data', args=[1])).status_code, 403)
-            self.assertEqual(self.client.get(reverse('ticket_image', args=[1, 1])).status_code, 403)
-            database.cursor.assert_not_called()
+            self.assertEqual(self.client.get(reverse('ticket_detail_data', args=[1])).status_code, 404)
+            self.assertEqual(self.client.get(reverse('ticket_image', args=[1, 1])).status_code, 404)
+            self.assertIn(self.pending.pk, database.cursor.return_value.__enter__.return_value.execute.call_args.args[1])
+            self.assertIn(self.pending.pk, view_database.cursor.return_value.__enter__.return_value.execute.call_args.args[1])
         self.pending.role = User.Role.STAFF
         self.pending.save(update_fields=['role'])
         with patch('accounts.tickets.connection') as database:
@@ -410,6 +418,73 @@ class AccessTests(TestCase):
             self.assertEqual(cursor.execute.call_args_list[1].args[1][-1], f'dashboard-user:{self.pending.pk}')
         payload['actor_name'] = 'spoofed'
         self.assertEqual(self.client.post(reverse('ticket_inventory'), data=json.dumps(payload), content_type='application/json').status_code, 400)
+
+    def test_researcher_ticket_permission_and_automatic_link(self):
+        import json
+        researcher = self.pending
+        researcher.role = User.Role.RESEARCHER
+        researcher.save(update_fields=['role'])
+        payload = {'reporter_name': 'Researcher', 'reporter_identifier': 'r@example.org', 'microscope': '', 'message': 'Help', 'ticket_type': 'USER_REQUEST', 'issue_type': '', 'priority': 'NORMAL', 'source_event_id': '8ff8b72d-3646-4e0d-a16d-296b53d9a275'}
+        self.client.force_login(researcher)
+        self.assertEqual(self.client.post(reverse('ticket_inventory'), data=json.dumps(payload), content_type='application/json').status_code, 403)
+        self.client.force_login(self.admin)
+        self.assertEqual(self.client.post(reverse('update_account', args=[researcher.pk]), {'role': 'researcher', 'active': 'yes', 'can_create_tickets': 'yes'}).status_code, 302)
+        researcher.refresh_from_db()
+        self.assertTrue(researcher.can_create_tickets)
+        self.assertTrue(AuditEvent.objects.filter(target=researcher, action='account_updated').exists())
+        self.client.force_login(researcher)
+        with patch('accounts.tickets.connection') as database:
+            database.cursor.return_value.__enter__.return_value.fetchone.return_value = (77, 1)
+            response = self.client.post(reverse('ticket_inventory'), data=json.dumps(payload), content_type='application/json')
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(TicketResearcherLink.objects.filter(ticket_id=77, researcher=researcher).exists())
+        self.assertTrue(AuditEvent.objects.filter(target=researcher, action='ticket_researcher_linked').exists())
+        self.client.force_login(self.admin)
+        self.client.post(reverse('update_account', args=[researcher.pk]), {'role': 'researcher', 'active': 'yes'})
+        self.client.force_login(researcher)
+        self.assertEqual(self.client.post(reverse('ticket_inventory'), data=json.dumps(payload), content_type='application/json').status_code, 403)
+
+    def test_ticket_researcher_link_checks_roles_and_stale_edits(self):
+        import json
+        researcher = self.pending
+        researcher.role = User.Role.RESEARCHER
+        researcher.save(update_fields=['role'])
+        other = User.objects.create_user(username='other-researcher', role=User.Role.RESEARCHER)
+        url = reverse('ticket_researcher_link', args=[12])
+        payload = {'researcher_id': str(researcher.pk), 'expected_researcher_id': None}
+        self.client.force_login(researcher)
+        self.assertEqual(self.client.patch(url, data=json.dumps(payload), content_type='application/json').status_code, 403)
+        self.client.force_login(self.admin)
+        with patch('accounts.views.connection') as database:
+            database.cursor.return_value.__enter__.return_value.fetchone.return_value = (12,)
+            self.assertEqual(self.client.patch(url, data=json.dumps(payload), content_type='application/json').status_code, 200)
+            self.assertTrue(TicketResearcherLink.objects.filter(ticket_id=12, researcher=researcher).exists())
+            stale = {'researcher_id': str(other.pk), 'expected_researcher_id': None}
+            self.assertEqual(self.client.patch(url, data=json.dumps(stale), content_type='application/json').status_code, 409)
+            self.assertTrue(TicketResearcherLink.objects.filter(ticket_id=12, researcher=researcher).exists())
+            remove = {'researcher_id': None, 'expected_researcher_id': str(researcher.pk)}
+            self.assertEqual(self.client.patch(url, data=json.dumps(remove), content_type='application/json').status_code, 200)
+            self.assertFalse(TicketResearcherLink.objects.filter(ticket_id=12).exists())
+
+    def test_researcher_ticket_summary_and_details_do_not_expose_staff_history(self):
+        researcher = self.pending
+        researcher.role = User.Role.RESEARCHER
+        researcher.save(update_fields=['role'])
+        self.client.force_login(researcher)
+        with patch('accounts.tickets.connection') as database:
+            cursor = database.cursor.return_value.__enter__.return_value
+            cursor.fetchone.return_value = (1, 0, 1, 0, 0, 0)
+            response = self.client.get(reverse('ticket_summary'))
+            self.assertEqual(response.json()['total'], 1)
+            self.assertEqual(response.json()['changes']['total'], 1)
+            self.assertEqual(cursor.execute.call_args.args[1], [researcher.pk])
+            self.assertIn('accounts_ticketresearcherlink', cursor.execute.call_args.args[0])
+            cursor.fetchone.return_value = (12, 'Name', 'scope', 'A report', 'USER_REQUEST', 'OPEN', None, None, None, 'dashboard-user:999')
+            response = self.client.get(reverse('ticket_detail_data', args=[12]))
+            self.assertEqual(response.status_code, 200)
+            self.assertNotIn('events', response.json())
+            self.assertEqual(response.json()['images'], [])
+            self.assertIn(researcher.pk, cursor.execute.call_args.args[1])
 
     def test_ticket_update_checks_role_version_and_reopening_reason(self):
         import json

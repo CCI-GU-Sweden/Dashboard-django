@@ -10,6 +10,7 @@ class User(AbstractUser):
 
     # An empty role is pending. is_active independently controls disabling.
     role = models.CharField(max_length=16, choices=Role.choices, blank=True, default='')
+    can_create_tickets = models.BooleanField(default=False)
 
 
 class AuditEvent(models.Model):
@@ -27,3 +28,8 @@ class VerifiedOmeroGroup(models.Model):
     valid_until = models.DateField()
     verified_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name='verified_omero_groups')
     verified_at = models.DateTimeField(auto_now=True)
+
+
+class TicketResearcherLink(models.Model):
+    ticket_id = models.PositiveBigIntegerField(unique=True)
+    researcher = models.ForeignKey(User, on_delete=models.PROTECT, related_name='linked_tickets')
