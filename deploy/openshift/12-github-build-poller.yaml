@@ -1,0 +1,78 @@
+# Poll GitHub from inside OpenShift when GitHub cannot reach the cluster API.
+# This starts candidate builds only; it never deploys an image.
+apiVersion: v1
+kind: List
+items:
+  - apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      name: dashboard-build-poller
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata:
+      name: dashboard-build-poller
+    rules:
+      - apiGroups: [build.openshift.io]
+        resources: [buildconfigs]
+        resourceNames: [dashboard-django]
+        verbs: [get]
+      - apiGroups: [build.openshift.io]
+        resources: [buildconfigs/instantiate]
+        resourceNames: [dashboard-django]
+        verbs: [create]
+      - apiGroups: [build.openshift.io]
+        resources: [builds]
+        verbs: [list]
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      name: dashboard-build-poller
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: Role
+      name: dashboard-build-poller
+    subjects:
+      - kind: ServiceAccount
+        name: dashboard-build-poller
+        namespace: core-omero-test
+  - apiVersion: batch/v1
+    kind: CronJob
+    metadata:
+      name: dashboard-build-poller
+    spec:
+      schedule: '*/5 * * * *'
+      concurrencyPolicy: Forbid
+      successfulJobsHistoryLimit: 2
+      failedJobsHistoryLimit: 3
+      jobTemplate:
+        spec:
+          backoffLimit: 0
+          activeDeadlineSeconds: 120
+          template:
+            spec:
+              serviceAccountName: dashboard-build-poller
+              restartPolicy: Never
+              containers:
+                - name: poller
+                  image: quay.io/openshift/origin-cli:4.14
+                  resources:
+                    requests: {cpu: 10m, memory: 48Mi}
+                    limits: {cpu: 200m, memory: 128Mi}
+                  command: [python3, -c]
+                  args:
+                    - |
+                      import json, re, subprocess, urllib.request
+                      url = 'https://api.github.com/repos/CCI-GU-Sweden/Dashboard-django/git/ref/heads/main'
+                      request = urllib.request.Request(url, headers={'Accept': 'application/vnd.github+json', 'User-Agent': 'dashboard-build-poller'})
+                      with urllib.request.urlopen(request, timeout=20) as response:
+                          commit = json.load(response)['object']['sha']
+                      if not re.fullmatch(r'[0-9a-f]{40}', commit):
+                          raise ValueError('GitHub returned an invalid commit ID')
+                      result = subprocess.run(['oc', 'get', 'builds', '-l', 'buildconfig=dashboard-django', '-o', 'json'], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=30)
+                      builds = json.loads(result.stdout)['items']
+                      matches = [b for b in builds if b.get('spec', {}).get('revision', {}).get('git', {}).get('commit') == commit]
+                      if matches:
+                          print('Commit already has a build:', commit, matches[-1]['metadata']['name'], matches[-1].get('status', {}).get('phase', 'unknown'))
+                      else:
+                          print('Starting candidate build for:', commit, flush=True)
+                          subprocess.run(['oc', 'start-build', 'dashboard-django', '--commit=' + commit], check=True, timeout=30)

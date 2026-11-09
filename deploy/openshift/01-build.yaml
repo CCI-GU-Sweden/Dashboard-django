@@ -10,13 +10,8 @@ items:
     metadata:
       name: dashboard-django
     spec:
-      # GitHub pushes can build candidates; image promotion remains manual.
+      # The in-cluster poller starts candidates; image promotion remains manual.
       runPolicy: Serial
-      triggers:
-        - type: GitHub
-          github:
-            secretReference:
-              name: dashboard-django-github-webhook
       source:
         type: Git
         git:

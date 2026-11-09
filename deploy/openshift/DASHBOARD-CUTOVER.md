@@ -55,19 +55,18 @@ delete either deployment to transfer data. The Django application already uses
 the shared PostgreSQL database, so switching the gateway does not require a
 copy of the ticket or OMERO data.
 
-The BuildConfig tracks `main` and has an OpenShift GitHub webhook trigger using
-the `dashboard-django-github-webhook` Secret. To complete the integration, copy
-the GitHub webhook URL from **Builds → BuildConfigs → dashboard-django** into
-the repository's **Settings → Webhooks**, choose `application/json` and push
-events. The URL contains a secret: do not paste it into chat or a repository.
-GitHub must be able to reach the cluster API and pass its TLS checks. Confirm
-the webhook delivery and a subsequent build from the intended commit; the
-OpenShift trigger alone does not create a GitHub webhook.
+The BuildConfig tracks `main`. GitHub could not deliver a push webhook to the
+cluster API (connection ended with EOF), so `dashboard-build-poller` checks
+the GitHub branch from inside the cluster every five minutes. It starts a
+candidate build pinned to the latest commit if no build already exists for that
+commit; a failed build is not retried automatically. The poller uses the
+dedicated service account and limited Role in `12-github-build-poller.yaml`.
+It requires outbound HTTPS to GitHub's API and is subject to GitHub's API rate
+limits. Monitor failed CronJobs and builds. The webhook trigger is disabled;
+remove the unused webhook in GitHub. Do not enable both mechanisms without
+accounting for duplicate builds. Polling was verified by build 21.
 
-For `core-omero-test`, the GitHub webhook was added on 2026-11-09 and GitHub
-reported a successful delivery. Its URL is a credential: do not publish it.
-
-Each successful push produces a candidate image. Verify its source revision and
+A push normally produces a candidate image within five minutes. Verify its source revision and
 retain the digest. Do not enable an automatic deployment trigger because database
 migrations, compatibility and release checks must happen before an image serves
 users. Manual promotion of a tested immutable digest is the release gate.
