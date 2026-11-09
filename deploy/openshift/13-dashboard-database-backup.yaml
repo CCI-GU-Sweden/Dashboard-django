@@ -1,0 +1,73 @@
+# Dashboard filestatistics database backup, separate from the OMERO DB backup.
+# The backup account must have SELECT on all relevant tables and sequences.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dashboard-filestatistics-backup
+spec:
+  schedule: '30 17 * * 1-5'
+  timeZone: Europe/Stockholm
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 1800
+      template:
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          containers:
+            - name: backup
+              image: registry.redhat.io/rhel9/postgresql-15
+              resources:
+                requests: {cpu: 50m, memory: 128Mi}
+                limits: {cpu: 500m, memory: 512Mi}
+              env:
+                - name: PGHOST
+                  value: filestatistics-pg15
+                - name: PGPORT
+                  value: '5432'
+                - name: PGDATABASE
+                  valueFrom:
+                    secretKeyRef: {name: filestatistics-pg15-credentials, key: POSTGRESQL_DATABASE}
+                - name: PGUSER
+                  valueFrom:
+                    secretKeyRef: {name: dashboard-backup-reader, key: PGUSER}
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef: {name: dashboard-backup-reader, key: PGPASSWORD}
+              volumeMounts:
+                - name: backup-volume
+                  mountPath: /postgresbackup
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  set -euo pipefail
+                  umask 077
+                  directory=/postgresbackup/dashboard-filestatistics
+                  mkdir -p "$directory"
+                  temporary=$(mktemp "$directory/.pending-XXXXXXXX")
+                  trap 'rm -f -- "$temporary" "$temporary.sha256"' EXIT
+                  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+                  suffix=${temporary##*/.pending-}
+                  final="$directory/dashboard-$stamp-$suffix.dump"
+                  pg_dump --no-password --format=custom --no-owner --no-acl --file="$temporary"
+                  # Read and decompress the entire archive before retaining it.
+                  pg_restore --no-owner --no-acl --file=/dev/null "$temporary"
+                  sha256sum "$temporary" | awk '{print $1}' > "$temporary.sha256"
+                  mv -- "$temporary" "$final"
+                  mv -- "$temporary.sha256" "$final.sha256"
+                  trap - EXIT
+                  # Retain the newest 30 successfully verified archives, only in
+                  # this application's own directory. Never touch OMERO backups.
+                  while IFS= read -r old; do
+                    [ -n "$old" ] && rm -f -- "$old" "$old.sha256"
+                  done < <(find "$directory" -maxdepth 1 -type f -name 'dashboard-*.dump' -printf '%f\n' | sort -r | tail -n +31 | sed "s|^|$directory/|")
+                  echo "Dashboard backup completed: $(basename "$final")"
+                  du -h "$final"
+          volumes:
+            - name: backup-volume
+              persistentVolumeClaim:
+                claimName: postgresbackup

@@ -5,6 +5,9 @@ production release, see [DASHBOARD-CUTOVER.md](DASHBOARD-CUTOVER.md). The
 original initial-deployment instructions below contain historical assumptions
 and must not be applied over the running cluster without review.
 
+For the separate dashboard database backup and restore test, see
+[DASHBOARD-BACKUP.md](DASHBOARD-BACKUP.md).
+
 These manifests prepare an **isolated test deployment of the Django foundation**. They do not deploy the existing Express dashboard's features and must not replace its Service or Route. They have not been tested on your cluster. Resource names are fixed to `dashboard-django`; use a separate project or review naming collisions first. Console labels can vary by OpenShift version and role.
 
 For the planned test in `core-omero-test`, inspection of the `dashboard-test` Deployment showed its database variables reference the `filestatistics-app-credentials` Secret. A read-only query found its connection uses database `omerofilestats`, role `filestats_dashboard`, and schema `public`; that role cannot create tables in that schema. The web Deployment references those same keys, while the migration Job uses the same host, port and database but takes its user and password from `filestatistics-pg15-credentials`. The migration credentials' target and permissions are not yet verified and those credentials were exposed and need rotation. The proposed Route is `https://dashboard-django-test.apps.k8s.gu.se/`, with the requested IP allowlist already in `04-app.yaml`. This short hostname has not been checked or created: confirm that cluster Route policy, DNS and the default certificate allow it. If it is changed, update both host values in `02-config.yaml`, the Route host in `04-app.yaml`, and the registered ORCID callback together. Nothing has been deployed by these instructions.
