@@ -28,7 +28,7 @@ spec:
               client = Client(HTTP_HOST='dashboard-django-test.apps.k8s.gu.se')
               client.force_login(user)
               try:
-                  for path in ['/', '/uploads/', '/storage/', '/administration/', '/tickets/', '/storage/billing/', '/api/uploads/summary', '/api/uploads/summary?metric=total_file_size_mb&period=30', '/api/uploads/scopes', '/api/omero/filesets', '/api/omero/groups', '/api/omero/history', '/api/omero/overview', '/api/omero/overview-card', '/api/omero/admin/policies', '/api/omero/admin/health', '/api/tickets', '/api/tickets/summary', '/api/tickets/equipment', '/api/omero/billing?startDate=2026-01-01&endDate=2026-02-01']:
+                  for path in ['/', '/uploads/', '/storage/', '/administration/', '/tickets/', '/storage/billing/', '/api/uploads/summary', '/api/uploads/summary?metric=total_file_size_mb&period=30', '/api/uploads/scopes', '/api/omero/filesets', '/api/omero/groups', '/api/omero/history', '/api/omero/overview', '/api/omero/overview-card', '/api/omero/admin/policies', '/api/omero/admin/health', '/api/tickets', '/api/tickets/summary', '/api/tickets/equipment', '/api/tickets/staff', '/api/tickets/researchers', '/api/omero/billing?startDate=2026-01-01&endDate=2026-02-01']:
                       response = client.get(path, secure=True)
                       print(path, response.status_code, flush=True)
                       if response.status_code != 200:
@@ -179,11 +179,30 @@ spec:
                       researcher_payload = {'reporter_name': 'Researcher', 'reporter_identifier': 'r@example.org', 'microscope': '', 'message': 'Temporary researcher ticket', 'ticket_type': 'USER_REQUEST', 'issue_type': '', 'priority': 'NORMAL', 'source_event_id': str(uuid.uuid4())}
                       if scoped.post('/api/tickets', data=json.dumps(researcher_payload), content_type='application/json', secure=True).status_code != 403:
                           raise RuntimeError('Researcher bypassed ticket creation permission.')
-                      User.objects.filter(pk=researcher.pk).update(can_create_tickets=True)
+                      permission = client.post('/administration/accounts/' + str(researcher.pk) + '/', data={'role': 'researcher', 'active': 'yes', 'can_create_tickets': 'yes'}, secure=True)
+                      researcher.refresh_from_db()
+                      print('researcher permission save:', permission.status_code, researcher.can_create_tickets, flush=True)
+                      if permission.status_code != 302 or not researcher.can_create_tickets:
+                          raise RuntimeError('Researcher creation permission did not save.')
                       created_own = scoped.post('/api/tickets', data=json.dumps(researcher_payload), content_type='application/json', secure=True)
                       print('researcher ticket creation:', created_own.status_code, flush=True)
                       if created_own.status_code != 201 or scoped.get('/api/tickets/summary', secure=True).json()['total'] != 2:
                           raise RuntimeError('Researcher self-linked creation failed.')
+                      client.post('/administration/accounts/' + str(researcher.pk) + '/', data={'role': 'researcher', 'active': 'yes'}, secure=True)
+                      if scoped.post('/api/tickets', data=json.dumps(researcher_payload), content_type='application/json', secure=True).status_code != 403:
+                          raise RuntimeError('Revoked researcher creation permission was ignored.')
+                      staff_user = User.objects.create_user(username='smoke-staff-' + uuid.uuid4().hex, role=User.Role.STAFF)
+                      staff_client = Client(HTTP_HOST='dashboard-django-test.apps.k8s.gu.se')
+                      staff_client.force_login(staff_user)
+                      staff_payload = dict(researcher_payload, source_event_id=str(uuid.uuid4()))
+                      staff_ticket = staff_client.post('/api/tickets', data=json.dumps(staff_payload), content_type='application/json', secure=True)
+                      print('staff ticket creation:', staff_ticket.status_code, flush=True)
+                      if staff_ticket.status_code != 201:
+                          raise RuntimeError('Staff could not create a ticket.')
+                      staff_changes = {'version': 1, 'status': 'IN_PROGRESS', 'priority': 'NORMAL', 'change_note': 'Staff smoke update'}
+                      staff_update = staff_client.patch('/api/tickets/' + staff_ticket.json()['ticket_id'], data=json.dumps(staff_changes), content_type='application/json', secure=True)
+                      if staff_update.status_code != 200:
+                          raise RuntimeError('Staff could not update a ticket.')
                       other = User.objects.create_user(username='smoke-other-' + uuid.uuid4().hex, role=User.Role.RESEARCHER)
                       other_client = Client(HTTP_HOST='dashboard-django-test.apps.k8s.gu.se')
                       other_client.force_login(other)

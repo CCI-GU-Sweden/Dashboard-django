@@ -616,7 +616,7 @@ def update_account(request, user_id):
             return HttpResponseBadRequest('The last active administrator cannot be removed.')
         before = {'role': target.role, 'is_active': target.is_active, 'can_create_tickets': target.can_create_tickets}
         target.role, target.is_active = role, active == 'yes'
-        target.can_create_tickets = role == User.Role.RESEARCHER and active == 'yes' and ticket_permission == 'yes'
+        target.can_create_tickets = role == User.Role.RESEARCHER and ticket_permission == 'yes'
         target.save(update_fields=['role', 'is_active', 'can_create_tickets'])
         if role != User.Role.RESEARCHER or active == 'no':
             VerifiedOmeroGroup.objects.filter(user=target).delete()

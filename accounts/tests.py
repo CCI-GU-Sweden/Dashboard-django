@@ -444,6 +444,37 @@ class AccessTests(TestCase):
         self.client.force_login(researcher)
         self.assertEqual(self.client.post(reverse('ticket_inventory'), data=json.dumps(payload), content_type='application/json').status_code, 403)
 
+    def test_ticket_permission_form_persists_and_staff_access_is_automatic(self):
+        from html.parser import HTMLParser
+        researcher = self.pending
+        researcher.role = User.Role.RESEARCHER
+        researcher.save(update_fields=['role'])
+        self.client.force_login(self.admin)
+        page = self.client.get(reverse('administration'))
+        class Forms(HTMLParser):
+            def __init__(self):
+                super().__init__(); self.form = None; self.controls = []
+            def handle_starttag(self, tag, attrs):
+                attrs = dict(attrs)
+                if tag == 'form': self.form = attrs.get('id')
+                if tag == 'input' and attrs.get('name') == 'can_create_tickets': self.controls.append((self.form, attrs))
+            def handle_endtag(self, tag):
+                if tag == 'form': self.form = None
+        parsed = Forms(); parsed.feed(page.content.decode())
+        self.assertEqual(parsed.controls[0][0], f'account-form-{researcher.pk}')
+        self.assertNotIn('checked', parsed.controls[0][1])
+        response = self.client.post(reverse('update_account', args=[researcher.pk]), {'role': 'researcher', 'active': 'yes', 'can_create_tickets': 'yes'}, follow=True)
+        self.assertEqual(response.status_code, 200)
+        researcher.refresh_from_db()
+        self.assertTrue(researcher.can_create_tickets)
+        parsed = Forms(); parsed.feed(response.content.decode())
+        self.assertIn('checked', parsed.controls[0][1])
+        self.assertContains(response, 'Automatic for admin')
+        self.client.post(reverse('update_account', args=[researcher.pk]), {'role': 'researcher', 'active': 'no', 'can_create_tickets': 'yes'})
+        researcher.refresh_from_db()
+        self.assertTrue(researcher.can_create_tickets)
+        self.assertFalse(researcher.is_active)
+
     def test_ticket_researcher_link_checks_roles_and_stale_edits(self):
         import json
         researcher = self.pending
