@@ -11,4 +11,6 @@ data:
   # This test Route uses edge TLS and replaces forwarded headers. Re-verify
   # trusted proxy behavior and backend reachability for any other deployment.
   DJANGO_TRUST_PROXY_HTTPS: "1"
+  # Sandbox values are retained for the one-off isolation Job. The running web
+  # deployment explicitly overrides this to production and uses dashboard-app.
   ORCID_ENVIRONMENT: sandbox

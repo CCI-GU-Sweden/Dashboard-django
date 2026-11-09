@@ -21,10 +21,13 @@ come from `dashboard-app`, while the existing Django signing key and database
 references remain in place. The local database backup was archived and listed
 successfully; this is not a full restore test.
 
-The deployment image is currently the locally built candidate from build 19;
-commit the migration files before expecting a Git build to reproduce it. The
-old deployment still has its original image trigger: ensure it stays scaled to
-zero. The temporary gateway canary and one-off test Jobs are separate resources.
+The deployed image was built in OpenShift build 20 from Git commit `d6018d5`.
+The old deployment still has its original image trigger: ensure it stays scaled
+to zero. The temporary gateway canary and one-off test Jobs are separate
+resources. The `dashboard-django-config` ConfigMap retains sandbox values for
+the one-off isolation Job; explicit web-container environment variables override
+the hostnames, ORCID environment and ORCID credentials. Do not remove these
+overrides while production identities are in the database.
 
 ## Background and production checklist
 

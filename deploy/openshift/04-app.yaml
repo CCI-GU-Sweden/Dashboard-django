@@ -39,6 +39,20 @@ items:
                     name: dashboard-django-app
               # Reuse the database keys referenced by the current dashboard.
               env:
+                # Explicit values override the sandbox values in envFrom. Do
+                # not remove these on a database containing production users.
+                - name: ORCID_ENVIRONMENT
+                  value: production
+                - name: ORCID_CLIENT_ID
+                  valueFrom:
+                    secretKeyRef: {name: dashboard-app, key: ORCID_CLIENT_ID}
+                - name: ORCID_CLIENT_SECRET
+                  valueFrom:
+                    secretKeyRef: {name: dashboard-app, key: ORCID_CLIENT_SECRET}
+                - name: DJANGO_ALLOWED_HOSTS
+                  value: dashboard-probe.local,dashboard-django-test.apps.k8s.gu.se,dashboard-test-core-omero-test.apps.k8s.gu.se
+                - name: DJANGO_CSRF_TRUSTED_ORIGINS
+                  value: https://dashboard-django-test.apps.k8s.gu.se,https://dashboard-test-core-omero-test.apps.k8s.gu.se
                 - name: PGHOST
                   valueFrom:
                     secretKeyRef: {name: filestatistics-app-credentials, key: PGHOST}
