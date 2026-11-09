@@ -14,6 +14,50 @@ class AccessTests(TestCase):
         self.admin = User.objects.create_user(username='admin', role=User.Role.ADMIN)
         self.pending = User.objects.create_user(username='pending')
 
+    def test_storage_overview_card_respects_roles_and_verified_group(self):
+        from datetime import date, timedelta
+        from django.utils import timezone as django_timezone
+        url = reverse('storage_overview_card')
+        self.client.force_login(self.pending)
+        self.assertEqual(self.client.get(url).status_code, 403)
+        self.pending.role = User.Role.RESEARCHER
+        self.pending.save(update_fields=['role'])
+        self.assertEqual(self.client.get(url).status_code, 403)
+        VerifiedOmeroGroup.objects.create(user=self.pending, group_id=42, valid_until=django_timezone.localdate() + timedelta(days=1), verified_by=self.admin)
+        with patch('accounts.storage.connection') as database:
+            cursor = database.cursor.return_value.__enter__.return_value
+            cursor.fetchall.return_value = [('current', date(2026, 11, 8), 4, 2), ('previous', date(2026, 10, 9), 2, 1)]
+            response = self.client.get(url, {'group_id': '999'})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()['metrics']['filesets']['change_percent'], 100.0)
+            self.assertEqual(response.json()['metrics']['storage_gb']['value'], 2.0)
+            self.assertNotIn('daily_sek', response.json()['metrics'])
+            self.assertEqual(cursor.execute.call_args.args[1], [42])
+            self.assertIn('group_id = %s', cursor.execute.call_args.args[0])
+            self.assertNotIn('daily_charge_ore', cursor.execute.call_args.args[0])
+            page = self.client.get(reverse('home'))
+            self.assertContains(page, 'overview-omero-filesets')
+            self.assertNotContains(page, 'overview-omero-billable')
+            self.pending.role = User.Role.STAFF
+            self.pending.save(update_fields=['role'])
+            cursor.fetchall.return_value = [('current', date(2026, 11, 8), 10, 3, 0.5), ('previous', date(2026, 10, 9), 8, 0, 0)]
+            result = self.client.get(url)
+            self.assertEqual(result.status_code, 200)
+            self.assertEqual(result.json()['metrics']['daily_sek']['value'], 0.5)
+            self.assertIsNone(result.json()['metrics']['storage_gb']['change_percent'])
+            self.assertEqual(cursor.execute.call_args.args[1], [])
+            self.client.force_login(self.admin)
+            self.assertEqual(self.client.get(url).json()['metrics']['daily_sek']['value'], 0.5)
+
+    def test_storage_overview_card_without_snapshots_is_not_zero(self):
+        self.client.force_login(self.admin)
+        with patch('accounts.storage.connection') as database:
+            database.cursor.return_value.__enter__.return_value.fetchall.return_value = []
+            response = self.client.get(reverse('storage_overview_card'))
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json()['snapshot_date'])
+        self.assertIsNone(response.json()['metrics']['filesets']['value'])
+
     def test_verified_group_scopes_all_researcher_queries_and_revoke(self):
         from datetime import timedelta
         from django.utils import timezone as django_timezone

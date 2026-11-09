@@ -164,6 +164,18 @@ def storage_overview(request):
 
 
 @require_GET
+def storage_overview_card(request):
+    allowed, group = storage_scope(request.user)
+    if not allowed:
+        return JsonResponse({'error': 'A verified OMERO group is required.'}, status=403)
+    from .storage import overview_card
+    try:
+        return JsonResponse(overview_card(allowed_group=group, include_billable=operational_access(request.user)))
+    except DatabaseError:
+        return JsonResponse({'error': 'Storage summary is currently unavailable.'}, status=503)
+
+
+@require_GET
 def storage_admin_data(request, kind):
     if not is_dashboard_admin(request.user):
         return JsonResponse({'error': 'Administrator access required.'}, status=403)

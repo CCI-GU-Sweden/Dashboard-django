@@ -28,7 +28,7 @@ spec:
               client = Client(HTTP_HOST='dashboard-django-test.apps.k8s.gu.se')
               client.force_login(user)
               try:
-                  for path in ['/', '/uploads/', '/storage/', '/administration/', '/tickets/', '/storage/billing/', '/api/uploads/summary', '/api/uploads/summary?metric=total_file_size_mb&period=30', '/api/uploads/scopes', '/api/omero/filesets', '/api/omero/groups', '/api/omero/history', '/api/omero/overview', '/api/omero/admin/policies', '/api/omero/admin/health', '/api/tickets', '/api/tickets/summary', '/api/tickets/equipment', '/api/omero/billing?startDate=2026-01-01&endDate=2026-02-01']:
+                  for path in ['/', '/uploads/', '/storage/', '/administration/', '/tickets/', '/storage/billing/', '/api/uploads/summary', '/api/uploads/summary?metric=total_file_size_mb&period=30', '/api/uploads/scopes', '/api/omero/filesets', '/api/omero/groups', '/api/omero/history', '/api/omero/overview', '/api/omero/overview-card', '/api/omero/admin/policies', '/api/omero/admin/health', '/api/tickets', '/api/tickets/summary', '/api/tickets/equipment', '/api/omero/billing?startDate=2026-01-01&endDate=2026-02-01']:
                       response = client.get(path, secure=True)
                       print(path, response.status_code, flush=True)
                       if response.status_code != 200:
@@ -106,6 +106,15 @@ spec:
                           raise RuntimeError('Researcher group selector is missing.')
                       scoped = Client(HTTP_HOST='dashboard-django-test.apps.k8s.gu.se')
                       scoped.force_login(researcher)
+                      card = scoped.get('/api/omero/overview-card?group_id=1', secure=True)
+                      if card.status_code != 200 or card.json()['snapshot_date'] is not None or 'daily_sek' in card.json()['metrics']:
+                          raise RuntimeError('Researcher overview is not correctly scoped.')
+                      if email_group:
+                          VerifiedOmeroGroup.objects.filter(user=researcher).update(group_id=email_group[0])
+                          card = scoped.get('/api/omero/overview-card', secure=True)
+                          if card.status_code != 200 or card.json()['snapshot_date'] is None or 'daily_sek' in card.json()['metrics']:
+                              raise RuntimeError('Researcher group overview failed.')
+                          VerifiedOmeroGroup.objects.filter(user=researcher).update(group_id=9223372036854775806)
                       for path in ['/api/omero/filesets?group_id=1', '/api/omero/history?group_id=1', '/api/omero/groups']:
                           response = scoped.get(path, secure=True)
                           print('researcher scoped:', path, response.status_code, flush=True)

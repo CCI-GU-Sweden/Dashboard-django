@@ -7,6 +7,37 @@ class InvalidStorageFilters(ValueError):
     pass
 
 
+def overview_card(allowed_group=None, include_billable=False):
+    """Latest snapshot and closest available snapshot at least 30 days earlier."""
+    columns = 'snapshot_date, fileset_count, total_bytes' + (', daily_charge_ore' if include_billable else '')
+    sums = 'SUM(fileset_count), SUM(total_bytes)::numeric / 1000000000' + (', SUM(daily_charge_ore)::numeric / 100' if include_billable else '')
+    where = "snapshot_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Stockholm')::date"
+    values = []
+    if allowed_group is not None:
+        where += ' AND group_id = %s'
+        values.append(allowed_group)
+    with connection.cursor() as cursor:
+        cursor.execute(f'''WITH scoped AS (SELECT {columns} FROM public.group_storage_snapshot WHERE {where}),
+            latest_snapshot AS (SELECT MAX(snapshot_date) AS snapshot_date FROM scoped),
+            comparison_snapshot AS (SELECT MAX(scoped.snapshot_date) AS snapshot_date FROM scoped CROSS JOIN latest_snapshot
+                WHERE scoped.snapshot_date <= latest_snapshot.snapshot_date - 30),
+            selected AS (SELECT snapshot_date, 'current' AS period FROM latest_snapshot UNION ALL
+                         SELECT snapshot_date, 'previous' AS period FROM comparison_snapshot)
+            SELECT selected.period, scoped.snapshot_date, {sums}
+            FROM selected JOIN scoped ON scoped.snapshot_date = selected.snapshot_date
+            GROUP BY selected.period, scoped.snapshot_date''', values)
+        rows = {row[0]: row for row in cursor.fetchall()}
+    current, previous = rows.get('current'), rows.get('previous')
+    keys = ['filesets', 'storage_gb'] + (['daily_sek'] if include_billable else [])
+    metrics = {}
+    for index, key in enumerate(keys, start=2):
+        value = float(current[index]) if current and current[index] is not None else None
+        before = float(previous[index]) if previous and previous[index] is not None else None
+        change = None if value is None or before is None or (before == 0 and value != 0) else (0.0 if before == 0 else round((value - before) / before * 100, 1))
+        metrics[key] = {'value': value, 'change_percent': change}
+    return {'snapshot_date': current[1] if current else None, 'comparison_date': previous[1] if previous else None, 'metrics': metrics}
+
+
 def list_filesets(params, allowed_group=None):
     try:
         page = int(params.get('page', '1'))
