@@ -37,6 +37,14 @@ spec:
                           raise RuntimeError('Upload chart data is missing.')
                   import json, uuid
                   from django.db import connection, transaction
+                  def browser_multipart(fields):
+                      parts = []
+                      for name, value in fields.items():
+                          parts.append(('--browser-boundary\r\nContent-Disposition: form-data; name="' + name + '"\r\n\r\n' + str(value) + '\r\n').encode())
+                      parts.append(b'--browser-boundary\r\nContent-Disposition: form-data; name="images"; filename=""\r\nContent-Type: application/octet-stream\r\n\r\n\r\n')
+                      parts.append(b'--browser-boundary--\r\n')
+                      return b''.join(parts)
+                  multipart_type = 'multipart/form-data; boundary=browser-boundary'
                   with connection.cursor() as cursor:
                       cursor.execute('SELECT fileset_id FROM public.omero_fileset ORDER BY fileset_id LIMIT 1')
                       sample_fileset = cursor.fetchone()
@@ -110,6 +118,19 @@ spec:
                       print('stale ticket update:', stale.status_code, flush=True)
                       if stale.status_code != 409:
                           raise RuntimeError('Stale ticket update smoke test failed.')
+                      browser_payload = dict(payload, source_event_id=str(uuid.uuid4()))
+                      browser_ticket = client.generic('POST', '/api/tickets', browser_multipart(browser_payload), content_type=multipart_type, secure=True)
+                      print('browser ticket without image:', browser_ticket.status_code, flush=True)
+                      if browser_ticket.status_code != 201:
+                          raise RuntimeError('Browser-style ticket without image failed.')
+                      browser_update = {'version': '1', 'status': 'IN_PROGRESS', 'priority': 'NORMAL', 'change_note': 'Browser update', 'resolution_note': '', 'issue_type': '', 'assigned_to': ''}
+                      browser_result = client.generic('POST', '/api/tickets/' + browser_ticket.json()['ticket_id'], browser_multipart(browser_update), content_type=multipart_type, secure=True)
+                      if browser_result.status_code != 200:
+                          raise RuntimeError('Browser-style ticket update without image failed.')
+                      invalid_payload = dict(payload, reporter_identifier='invalid-email', message='')
+                      invalid_ticket = client.post('/api/tickets', data=json.dumps(invalid_payload), content_type='application/json', secure=True)
+                      if invalid_ticket.status_code != 400 or 'Contact email:' not in invalid_ticket.json()['error'] or 'Message:' not in invalid_ticket.json()['error']:
+                          raise RuntimeError('Ticket validation errors were not specific.')
                       from io import BytesIO
                       from PIL import Image
                       from django.core.files.uploadedfile import SimpleUploadedFile
@@ -184,7 +205,7 @@ spec:
                       print('researcher permission save:', permission.status_code, researcher.can_create_tickets, flush=True)
                       if permission.status_code != 302 or not researcher.can_create_tickets:
                           raise RuntimeError('Researcher creation permission did not save.')
-                      created_own = scoped.post('/api/tickets', data=json.dumps(researcher_payload), content_type='application/json', secure=True)
+                      created_own = scoped.generic('POST', '/api/tickets', browser_multipart(researcher_payload), content_type=multipart_type, secure=True)
                       print('researcher ticket creation:', created_own.status_code, flush=True)
                       if created_own.status_code != 201 or scoped.get('/api/tickets/summary', secure=True).json()['total'] != 2:
                           raise RuntimeError('Researcher self-linked creation failed.')

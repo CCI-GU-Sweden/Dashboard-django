@@ -363,14 +363,16 @@ def ticket_summary(researcher_id=None):
 def read_researcher_ticket(ticket_id, researcher_id):
     with connection.cursor() as cursor:
         cursor.execute('''SELECT t.ticket_id, t.reporter_name, t.microscope, t.message, t.ticket_type, t.status,
-            t.opened_at, t.resolved_at, t.updated_at, t.created_by
+            t.opened_at, t.resolved_at, t.updated_at, t.created_by, t.resolution_note
             FROM public.microscope_ticket t JOIN public.accounts_ticketresearcherlink l ON l.ticket_id = t.ticket_id
             WHERE t.ticket_id = %s AND l.researcher_id = %s''', [ticket_id, researcher_id])
         row = cursor.fetchone()
         if not row:
             return None
-        keys = ('ticket_id', 'reporter_name', 'microscope', 'message', 'ticket_type', 'status', 'opened_at', 'resolved_at', 'updated_at', 'created_by')
+        keys = ('ticket_id', 'reporter_name', 'microscope', 'message', 'ticket_type', 'status', 'opened_at', 'resolved_at', 'updated_at', 'created_by', 'resolution_note')
         result = dict(zip(keys, row))
+        if result['status'] != 'RESOLVED':
+            result['resolution_note'] = None
         result['ticket_id'] = str(result['ticket_id'])
         result['images'] = []
         if result.pop('created_by') == f'dashboard-user:{researcher_id}':

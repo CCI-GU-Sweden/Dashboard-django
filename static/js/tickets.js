@@ -7,7 +7,13 @@
   const date = value => value ? new Intl.DateTimeFormat(undefined, {timeZone: 'Europe/Stockholm', dateStyle: 'medium', timeStyle: 'short'}).format(new Date(value)) : '—';
   let page = 1, submissionId = null, equipment = new Map(), staff = new Map(), researchers = [], updateTicket = null, inventorySequence = 0;
   function equipmentName(value) {return equipment.get(value) || value || 'Facility-wide';}
+  function omitUnselectedImages(payload) {const files = payload.getAll('images'); if (files.length && files.every(file => typeof file !== 'string' && !file.name)) payload.delete('images');}
   function assignedName(value) {if (!value) return 'Unassigned'; return value.startsWith('dashboard-user:') ? staff.get(value.slice(15)) || 'Former staff member' : value;}
+  async function ticketResponse(response) {
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || (response.status === 403 ? 'Your session or permission may have expired. Refresh the page and sign in again.' : response.status === 413 ? 'The upload is too large. Use up to five images of at most 5 MiB each.' : 'The ticket could not be saved. Please try again.'));
+    return result;
+  }
   async function read(url) {const response = await fetch(url, {credentials: 'same-origin'}); if (!response.ok) throw new Error('Ticket data is currently unavailable.'); return response.json();}
   async function details(id) {return read(`/api/tickets/${encodeURIComponent(id)}`);}
   function updateButton(id, text = 'Update') {const button = node('button', text, 'button is-small is-light'); button.type = 'button'; button.addEventListener('click', () => openUpdate(id)); return button;}
@@ -80,8 +86,8 @@
   $('add-ticket').addEventListener('click', () => {submissionId ||= crypto.randomUUID(); createDialog.showModal();});
   for (const id of ['close-ticket', 'cancel-ticket']) $(id).addEventListener('click', () => createDialog.close());
   createForm.addEventListener('submit', async event => {
-    event.preventDefault(); const button = createForm.querySelector('[type=submit]'), error = $('create-error'), payload = new FormData(createForm); payload.set('source_event_id', submissionId); button.disabled = true; error.textContent = '';
-    try {const response = await fetch('/api/tickets', {method: 'POST', credentials: 'same-origin', headers: {'X-CSRFToken': createForm.elements.csrfmiddlewaretoken.value}, body: payload}); const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Unable to create ticket.'); createDialog.close(); createForm.reset(); submissionId = null; page = 1; load(); loadSummary();}
+    event.preventDefault(); const button = createForm.querySelector('[type=submit]'), error = $('create-error'), payload = new FormData(createForm); payload.set('source_event_id', submissionId); omitUnselectedImages(payload); button.disabled = true; error.textContent = '';
+    try {const response = await fetch('/api/tickets', {method: 'POST', credentials: 'same-origin', headers: {'X-CSRFToken': createForm.elements.csrfmiddlewaretoken.value}, body: payload}); await ticketResponse(response); createDialog.close(); createForm.reset(); submissionId = null; page = 1; load(); loadSummary();}
     catch (problem) {error.textContent = problem.message;} finally {button.disabled = false;}
   });
   const updateDialog = $('update-dialog'), updateForm = $('update-form');
@@ -99,8 +105,8 @@
   for (const id of ['close-update', 'cancel-update']) $(id).addEventListener('click', () => updateDialog.close());
   $('reload-update').addEventListener('click', async () => {try {fillUpdate(await details(updateTicket.ticket_id), true);} catch (error) {$('update-error').textContent = error.message;}});
   updateForm.addEventListener('submit', async event => {
-    event.preventDefault(); const button = updateForm.querySelector('[type=submit]'), payload = new FormData(updateForm); payload.set('version', String(updateTicket.version)); if (payload.get('assigned_to') === '__keep__') payload.delete('assigned_to'); button.disabled = true; $('update-error').textContent = '';
-    try {const response = await fetch(`/api/tickets/${encodeURIComponent(updateTicket.ticket_id)}`, {method: 'POST', credentials: 'same-origin', headers: {'X-CSRFToken': updateForm.elements.csrfmiddlewaretoken.value}, body: payload}); const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Unable to update ticket.'); updateDialog.close(); load(); loadSummary();}
+    event.preventDefault(); const button = updateForm.querySelector('[type=submit]'), payload = new FormData(updateForm); payload.set('version', String(updateTicket.version)); omitUnselectedImages(payload); if (payload.get('assigned_to') === '__keep__') payload.delete('assigned_to'); button.disabled = true; $('update-error').textContent = '';
+    try {const response = await fetch(`/api/tickets/${encodeURIComponent(updateTicket.ticket_id)}`, {method: 'POST', credentials: 'same-origin', headers: {'X-CSRFToken': updateForm.elements.csrfmiddlewaretoken.value}, body: payload}); await ticketResponse(response); updateDialog.close(); load(); loadSummary();}
     catch (error) {$('update-error').textContent = error.message;} finally {button.disabled = false;}
   });
   function fillEquipment(items) {

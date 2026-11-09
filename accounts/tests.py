@@ -510,11 +510,16 @@ class AccessTests(TestCase):
             self.assertEqual(response.json()['changes']['total'], 1)
             self.assertEqual(cursor.execute.call_args.args[1], [researcher.pk])
             self.assertIn('accounts_ticketresearcherlink', cursor.execute.call_args.args[0])
-            cursor.fetchone.return_value = (12, 'Name', 'scope', 'A report', 'USER_REQUEST', 'OPEN', None, None, None, 'dashboard-user:999')
+            cursor.fetchone.return_value = (12, 'Name', 'scope', 'A report', 'USER_REQUEST', 'OPEN', None, None, None, 'dashboard-user:999', 'Previous note')
             response = self.client.get(reverse('ticket_detail_data', args=[12]))
             self.assertEqual(response.status_code, 200)
             self.assertNotIn('events', response.json())
             self.assertEqual(response.json()['images'], [])
+            self.assertIsNone(response.json()['resolution_note'])
+            self.assertEqual(cursor.execute.call_args.args[1], [12, researcher.pk])
+            cursor.fetchone.return_value = (12, 'Name', 'scope', 'A report', 'USER_REQUEST', 'RESOLVED', None, None, None, 'dashboard-user:999', 'Fixed the issue')
+            response = self.client.get(reverse('ticket_detail_data', args=[12]))
+            self.assertEqual(response.json()['resolution_note'], 'Fixed the issue')
             self.assertIn(researcher.pk, cursor.execute.call_args.args[1])
 
     def test_ticket_update_checks_role_version_and_reopening_reason(self):
@@ -555,6 +560,47 @@ class AccessTests(TestCase):
             validate_images([SimpleUploadedFile('empty.png', b'')])
         with self.assertRaises(InvalidTicketFilters):
             validate_images([SimpleUploadedFile('x.png', buffer.getvalue()) for _ in range(6)])
+
+    def test_browser_multipart_empty_image_does_not_block_ticket_creation_or_update(self):
+        def browser_body(fields):
+            parts = []
+            for name, value in fields.items():
+                parts.append(f'--browser-boundary\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode())
+            parts.append(b'--browser-boundary\r\nContent-Disposition: form-data; name="images"; filename=""\r\nContent-Type: application/octet-stream\r\n\r\n\r\n')
+            parts.append(b'--browser-boundary--\r\n')
+            return b''.join(parts)
+        create = {'reporter_name': 'Reporter', 'reporter_identifier': 'reporter@example.org', 'microscope': '', 'message': 'Help', 'ticket_type': 'USER_REQUEST', 'issue_type': '', 'priority': 'NORMAL', 'source_event_id': '8ff8b72d-3646-4e0d-a16d-296b53d9a275'}
+        content_type = 'multipart/form-data; boundary=browser-boundary'
+        for user in (self.admin, self.pending):
+            if user == self.pending:
+                user.role = User.Role.RESEARCHER
+                user.can_create_tickets = True
+                user.save(update_fields=['role', 'can_create_tickets'])
+            self.client.force_login(user)
+            with patch('accounts.tickets.connection') as database:
+                database.cursor.return_value.__enter__.return_value.fetchone.return_value = (100 + user.pk, 1)
+                response = self.client.generic('POST', reverse('ticket_inventory'), browser_body(create), content_type=content_type)
+            self.assertEqual(response.status_code, 201, response.content)
+        self.client.force_login(self.admin)
+        update = {'version': '1', 'status': 'IN_PROGRESS', 'priority': 'NORMAL', 'change_note': 'Update', 'resolution_note': '', 'issue_type': '', 'assigned_to': ''}
+        with patch('accounts.tickets.connection') as database:
+            database.cursor.return_value.__enter__.return_value.fetchone.side_effect = [('OPEN', 'NORMAL', None, 1, None, None), (2,)]
+            response = self.client.generic('POST', reverse('ticket_detail_data', args=[1]), browser_body(update), content_type=content_type)
+        self.assertEqual(response.status_code, 200, response.content)
+
+    def test_ticket_validation_returns_specific_field_errors(self):
+        import json
+        self.client.force_login(self.admin)
+        payload = {'reporter_name': 'Reporter', 'reporter_identifier': 'invalid-email', 'microscope': '', 'message': '', 'ticket_type': 'USER_REQUEST', 'issue_type': '', 'priority': 'NORMAL', 'source_event_id': '8ff8b72d-3646-4e0d-a16d-296b53d9a275'}
+        response = self.client.post(reverse('ticket_inventory'), data=json.dumps(payload), content_type='application/json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('Contact email:', response.json()['error'])
+        self.assertIn('Message:', response.json()['error'])
+        self.assertIn('reporter_identifier', response.json()['fields'])
+        payload['images'] = 'not a file'
+        response = self.client.post(reverse('ticket_inventory'), data=payload)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()['error'], 'Images must be uploaded as files.')
 
     def test_ticket_staff_list_and_assignments_exclude_researchers(self):
         from .tickets import TicketUpdateForm, update_ticket, InvalidTicketFilters
