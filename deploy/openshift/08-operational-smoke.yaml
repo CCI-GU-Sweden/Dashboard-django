@@ -56,6 +56,31 @@ spec:
                       if response.status_code != 200 or not isinstance(response.json()['recipients'], list):
                           raise RuntimeError('Email draft smoke test failed.')
                   with transaction.atomic():
+                      equipment_name = 'Rollback equipment ' + uuid.uuid4().hex
+                      created_equipment = client.post('/api/tickets/equipment/manage', data=json.dumps({'name': equipment_name, 'category': 'Microscope'}), content_type='application/json', secure=True)
+                      print('equipment creation:', created_equipment.status_code, flush=True)
+                      if created_equipment.status_code != 201:
+                          raise RuntimeError('Equipment creation failed.')
+                      new_equipment = created_equipment.json()
+                      ticket_payload = {'reporter_name': 'Rollback smoke test', 'reporter_identifier': 'test@example.org', 'microscope': new_equipment['id'], 'message': 'Temporary equipment test', 'ticket_type': 'USER_REQUEST', 'issue_type': '', 'priority': 'NORMAL', 'source_event_id': str(uuid.uuid4())}
+                      equipment_ticket = client.post('/api/tickets', data=json.dumps(ticket_payload), content_type='application/json', secure=True)
+                      if equipment_ticket.status_code != 201:
+                          raise RuntimeError('Ticket with new equipment failed.')
+                      expected = {'name': new_equipment['name'], 'category': new_equipment['category'], 'active': True}
+                      equipment_update = {'name': equipment_name, 'category': 'Microscope', 'active': False, 'expected': expected}
+                      equipment_url = '/api/tickets/equipment/manage/' + new_equipment['id']
+                      edited_equipment = client.patch(equipment_url, data=json.dumps(equipment_update), content_type='application/json', secure=True)
+                      print('equipment deactivation:', edited_equipment.status_code, flush=True)
+                      if edited_equipment.status_code != 200 or edited_equipment.json()['active']:
+                          raise RuntimeError('Equipment deactivation failed.')
+                      if client.patch(equipment_url, data=json.dumps(equipment_update), content_type='application/json', secure=True).status_code != 409:
+                          raise RuntimeError('Stale equipment update was not rejected.')
+                      saved_ticket = client.get('/api/tickets/' + equipment_ticket.json()['ticket_id'], secure=True)
+                      if saved_ticket.status_code != 200 or saved_ticket.json()['microscope'] != new_equipment['id']:
+                          raise RuntimeError('Equipment deactivation broke an existing ticket.')
+                      ticket_payload['source_event_id'] = str(uuid.uuid4())
+                      if client.post('/api/tickets', data=json.dumps(ticket_payload), content_type='application/json', secure=True).status_code != 400:
+                          raise RuntimeError('Inactive equipment was allowed on a new ticket.')
                       payload = {'reporter_name': 'Rollback smoke test', 'reporter_identifier': 'test@example.org', 'microscope': '', 'message': 'Temporary rollback test', 'ticket_type': 'USER_REQUEST', 'issue_type': '', 'priority': 'NORMAL', 'source_event_id': str(uuid.uuid4())}
                       with connection.cursor() as cursor:
                           cursor.execute('SELECT equipment_id FROM public.ticket_equipment WHERE active = true ORDER BY equipment_id LIMIT 1')

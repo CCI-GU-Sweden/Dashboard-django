@@ -1,5 +1,5 @@
 from django.contrib.auth.decorators import login_required
-from django.db import DatabaseError, connection, transaction
+from django.db import DatabaseError, IntegrityError, connection, transaction
 from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
@@ -327,7 +327,49 @@ def ticket_equipment(request):
         return JsonResponse({'error': 'Staff access required.'}, status=403)
     from .tickets import list_equipment
     try:
-        return JsonResponse({'equipment': list_equipment()})
+        return JsonResponse({'equipment': list_equipment(include_inactive=True)})
+    except DatabaseError:
+        return JsonResponse({'error': 'Equipment is currently unavailable.'}, status=503)
+
+
+@require_http_methods(['GET', 'POST', 'PATCH'])
+def manage_ticket_equipment(request, equipment_id=None):
+    import json
+    import re
+    from .tickets import EquipmentForm, TicketConflict, list_equipment, save_equipment
+    if not is_dashboard_admin(request.user):
+        return JsonResponse({'error': 'Administrator access required.'}, status=403)
+    if (request.method == 'PATCH') != (equipment_id is not None):
+        return JsonResponse({'error': 'Invalid equipment request.'}, status=400)
+    if equipment_id and not re.fullmatch(r'[a-z][a-z0-9_]{0,99}', equipment_id):
+        return JsonResponse({'error': 'Invalid equipment ID.'}, status=400)
+    try:
+        if request.method == 'GET':
+            return JsonResponse({'equipment': list_equipment(include_inactive=True)})
+        try:
+            payload = json.loads(request.body)
+        except (ValueError, UnicodeDecodeError):
+            return JsonResponse({'error': 'Invalid equipment data.'}, status=400)
+        allowed = {'name', 'category'} if request.method == 'POST' else {'name', 'category', 'active', 'expected'}
+        if not isinstance(payload, dict) or set(payload) != allowed:
+            return JsonResponse({'error': 'Invalid equipment data.'}, status=400)
+        if request.method == 'PATCH':
+            expected = payload['expected']
+            if (not isinstance(payload['active'], bool) or not isinstance(expected, dict)
+                    or set(expected) != {'name', 'category', 'active'} or not isinstance(expected['name'], str)
+                    or not isinstance(expected['category'], str) or not isinstance(expected['active'], bool)):
+                return JsonResponse({'error': 'Invalid equipment data.'}, status=400)
+        form = EquipmentForm(payload)
+        if not form.is_valid():
+            return JsonResponse({'error': 'Enter a valid equipment name and category.'}, status=400)
+        result = save_equipment(form, request.user, equipment_id, payload.get('expected'), payload.get('active', True))
+        if result is None:
+            return JsonResponse({'error': 'Equipment not found.'}, status=404)
+        return JsonResponse(result, status=201 if request.method == 'POST' else 200)
+    except TicketConflict as exc:
+        return JsonResponse({'error': str(exc)}, status=409)
+    except IntegrityError:
+        return JsonResponse({'error': 'Equipment with this name already exists, including inactive equipment.'}, status=409)
     except DatabaseError:
         return JsonResponse({'error': 'Equipment is currently unavailable.'}, status=503)
 

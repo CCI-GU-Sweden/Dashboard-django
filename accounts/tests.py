@@ -487,6 +487,45 @@ class AccessTests(TestCase):
             self.assertIn('microscope = %s OR microscope = (SELECT name', cursor.execute.call_args_list[0].args[0])
             self.assertEqual(cursor.execute.call_args_list[0].args[1][-2:], ['scope_1', 'scope_1'])
 
+    def test_equipment_management_is_admin_only_and_csrf_protected(self):
+        import json
+        payload = json.dumps({'name': 'New scope', 'category': 'Microscope'})
+        for role in ('', User.Role.RESEARCHER, User.Role.STAFF):
+            self.pending.role = role
+            self.pending.save(update_fields=['role'])
+            self.client.force_login(self.pending)
+            self.assertEqual(self.client.get(reverse('manage_ticket_equipment')).status_code, 403)
+            self.assertEqual(self.client.post(reverse('manage_ticket_equipment'), data=payload, content_type='application/json').status_code, 403)
+            if role == User.Role.STAFF:
+                self.assertNotContains(self.client.get(reverse('tickets')), 'id="manage-equipment"')
+        csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client.force_login(self.admin)
+        self.assertEqual(csrf_client.post(reverse('manage_ticket_equipment'), data=payload, content_type='application/json').status_code, 403)
+        self.client.force_login(self.admin)
+        self.assertContains(self.client.get(reverse('tickets')), 'id="manage-equipment"')
+
+    def test_equipment_add_edit_and_stale_edit_are_audited(self):
+        import json
+        self.client.force_login(self.admin)
+        with patch('accounts.tickets.connection') as database:
+            cursor = database.cursor.return_value.__enter__.return_value
+            response = self.client.post(reverse('manage_ticket_equipment'), data=json.dumps({'name': '  Test scope  ', 'category': 'microscope'}), content_type='application/json')
+            self.assertEqual(response.status_code, 201)
+            self.assertEqual(response.json()['category'], 'Microscope')
+            equipment_id = response.json()['id']
+            self.assertTrue(equipment_id.startswith('equipment_'))
+            self.assertTrue(AuditEvent.objects.filter(action='equipment_created').exists())
+            url = reverse('manage_ticket_equipment_item', args=[equipment_id])
+            cursor.fetchone.return_value = ('Test scope', 'Microscope', True)
+            update = {'name': 'Renamed scope', 'category': 'Microscope', 'active': False, 'expected': {'name': 'Test scope', 'category': 'Microscope', 'active': True}}
+            response = self.client.patch(url, data=json.dumps(update), content_type='application/json')
+            self.assertEqual(response.status_code, 200)
+            self.assertFalse(response.json()['active'])
+            self.assertTrue(AuditEvent.objects.filter(action='equipment_updated').exists())
+            cursor.fetchone.return_value = ('Another name', 'Microscope', True)
+            self.assertEqual(self.client.patch(url, data=json.dumps(update), content_type='application/json').status_code, 409)
+            self.assertEqual(AuditEvent.objects.filter(action='equipment_updated').count(), 1)
+
     def test_new_fileset_controls_are_validated_and_remain_staff_only(self):
         self.pending.role = User.Role.RESEARCHER
         self.pending.save(update_fields=['role'])

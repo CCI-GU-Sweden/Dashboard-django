@@ -976,7 +976,7 @@ tr.details-open .fileset-detail-button i {
 .ticket-card-note, .ticket-help { color: var(--muted); font-size: 0.82rem; line-height: 1.5; }
 .ticket-card-note { margin: -0.6rem 0 0; }
 .tickets-view { max-width: 1800px; padding: 1.5rem; margin: 0 auto; }
-.tickets-view .buttons { margin-bottom: 0; justify-content: flex-end; flex-wrap: nowrap; }
+.tickets-view .buttons { margin-bottom: 0; justify-content: flex-end; flex-wrap: wrap; }
 .ticket-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; margin: 1.25rem 0 0.5rem; }
 .ticket-metrics .metric-card { display: flex; flex-direction: column; gap: 0.25rem; }
 .ticket-metrics small { color: var(--muted); font-size: 0.78rem; }

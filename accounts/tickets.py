@@ -181,10 +181,53 @@ def create_ticket(form, user, images=None):
     return {'ticket_id': str(inserted[0]), 'version': inserted[1]}, True
 
 
-def list_equipment():
+def list_equipment(include_inactive=False):
     with connection.cursor() as cursor:
-        cursor.execute('SELECT equipment_id, name, category FROM public.ticket_equipment WHERE active = true ORDER BY category, name')
-        return [{'id': row[0], 'name': row[1], 'category': row[2]} for row in cursor.fetchall()]
+        cursor.execute('SELECT equipment_id, name, category, active FROM public.ticket_equipment' + ('' if include_inactive else ' WHERE active = true') + ' ORDER BY category, name, equipment_id')
+        return [{'id': row[0], 'name': row[1], 'category': row[2], 'active': row[3]} for row in cursor.fetchall()]
+
+
+class EquipmentForm(forms.Form):
+    name = forms.CharField(max_length=150, strip=True)
+    category = forms.CharField(max_length=100, strip=True)
+
+    def clean(self):
+        data = super().clean()
+        for key in ('name', 'category'):
+            value = data.get(key)
+            if value and any(ord(char) < 32 or ord(char) == 127 for char in value):
+                self.add_error(key, 'Control characters are not allowed.')
+            elif value:
+                data[key] = ' '.join(value.split())
+        if data.get('category', '').casefold() == 'microscope':
+            data['category'] = 'Microscope'
+        return data
+
+
+def save_equipment(form, actor, equipment_id=None, expected=None, active=True):
+    import uuid
+    from .models import AuditEvent
+    with transaction.atomic():
+        with connection.cursor() as cursor:
+            if equipment_id:
+                cursor.execute('SELECT name, category, active FROM public.ticket_equipment WHERE equipment_id = %s FOR UPDATE', [equipment_id])
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                before = dict(zip(('name', 'category', 'active'), row))
+                if before != expected:
+                    raise TicketConflict('This equipment changed since it was opened. Reload and try again.')
+                after = {'name': form.cleaned_data['name'], 'category': form.cleaned_data['category'], 'active': active}
+                if before != after:
+                    cursor.execute('UPDATE public.ticket_equipment SET name = %s, category = %s, active = %s WHERE equipment_id = %s', [after['name'], after['category'], active, equipment_id])
+            else:
+                equipment_id = 'equipment_' + uuid.uuid4().hex
+                before = {}
+                after = {'name': form.cleaned_data['name'], 'category': form.cleaned_data['category'], 'active': True}
+                cursor.execute('INSERT INTO public.ticket_equipment (equipment_id, name, category, active) VALUES (%s, %s, %s, %s)', [equipment_id, after['name'], after['category'], True])
+            if before != after:
+                AuditEvent.objects.create(actor=actor, target=actor, action='equipment_updated' if before else 'equipment_created', before={'id': equipment_id, **before}, after={'id': equipment_id, **after})
+    return {'id': equipment_id, **after}
 
 
 def list_tickets(params):

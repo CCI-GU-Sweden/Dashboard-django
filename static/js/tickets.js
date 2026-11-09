@@ -85,10 +85,20 @@
     catch (error) {$('update-error').textContent = error.message;} finally {button.disabled = false;}
   });
   function fillEquipment(items) {
-    const selects = [$('microscope'), $('create-equipment')]; const categories = new Map();
-    items.forEach(item => {equipment.set(item.id, item.name); const category = friendly(item.category || 'Other'); if (!categories.has(category)) categories.set(category, []); categories.get(category).push(item);});
-    selects.forEach(select => categories.forEach((entries, name) => {const group = document.createElement('optgroup'); group.label = name; entries.forEach(item => {const option = node('option', item.name); option.value = item.id; group.append(option);}); select.append(group);}));
+    equipment.clear();
+    items.forEach(item => equipment.set(item.id, item.name));
+    for (const [select, isFilter] of [[$('microscope'), true], [$('create-equipment'), false]]) {
+      const selected = select.value;
+      select.replaceChildren();
+      const all = node('option', isFilter ? 'All equipment' : 'Facility-wide'); all.value = ''; select.append(all);
+      if (isFilter) {const facility = node('option', 'Facility-wide'); facility.value = '__facility__'; select.append(facility);}
+      const categories = new Map();
+      items.filter(item => isFilter || item.active !== false).forEach(item => {const category = item.active === false ? 'Inactive equipment' : (item.category || 'Other'); if (!categories.has(category)) categories.set(category, []); categories.get(category).push(item);});
+      categories.forEach((entries, name) => {const group = document.createElement('optgroup'); group.label = name; entries.forEach(item => {const option = node('option', item.name); option.value = item.id; group.append(option);}); select.append(group);});
+      if (selected && Array.from(select.options).some(option => option.value === selected)) select.value = selected;
+    }
   }
+  document.addEventListener('equipment-changed', async () => {try {const data = await read('/api/tickets/equipment'); fillEquipment(data.equipment); load();} catch {status.textContent = 'Could not refresh equipment. Please reload the page.';}});
   Promise.all([read('/api/tickets/equipment'), read('/api/tickets/staff')]).then(([equipmentData, staffData]) => {fillEquipment(equipmentData.equipment); staff = new Map(staffData.staff.map(item => [String(item.id), item.name])); load();}).catch(() => {status.textContent = 'Equipment or staff list is unavailable. Please refresh.'; $('add-ticket').disabled = true;});
   loadSummary();
 })();

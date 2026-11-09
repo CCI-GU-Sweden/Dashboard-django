@@ -8,6 +8,7 @@ test('ticket list groups equipment, formats codes and loads images only on reque
     return {tag, children: [], listeners: {}, attributes: {}, value: '', textContent: '',
       append(...items) {this.children.push(...items);}, replaceChildren(...items) {this.children = items;},
       addEventListener(type, fn) {this.listeners[type] = fn;}, setAttribute(key, value) {this.attributes[key] = value;}, getAttribute(key) {return this.attributes[key];},
+      get options() {return this.children.flatMap(child => child.tag === 'optgroup' ? child.children : [child]);},
       after(item) {this.expanded = item;}, querySelector(selector) {return selector === 'img' ? this.children.find(child => child.tag === 'img') : null;},
     };
   }
@@ -16,12 +17,12 @@ test('ticket list groups equipment, formats codes and loads images only on reque
   const item = {ticket_id: '7', reporter_name: 'A', microscope: 'scope', message: 'Problem', ticket_type: 'INTERNAL_ISSUE', priority: 'NORMAL', status: 'OPEN', image_count: 1};
   const detail = {...item, events: [], images: [{id: '3', filename: 'image.png'}]};
   const requests = [];
-  const context = {document: {getElementById: id => elements[id], createElement: element}, URLSearchParams, Intl, Date, setTimeout, crypto: {randomUUID: () => 'test'},
-    fetch: async url => {requests.push(url); return {ok: true, json: async () => url.endsWith('/equipment') ? {equipment: [{id: 'scope', name: 'Microscope A', category: 'MICROSCOPE'}]} : url.endsWith('/staff') ? {staff: []} : url.endsWith('/summary') ? {total: 1, active: 1, resolved: 0} : url === '/api/tickets/7' ? detail : {count: 1, page: 1, page_size: 50, results: [item]}};}};
+  const context = {document: {getElementById: id => elements[id], createElement: element, addEventListener() {}}, URLSearchParams, Intl, Date, setTimeout, crypto: {randomUUID: () => 'test'},
+    fetch: async url => {requests.push(url); return {ok: true, json: async () => url.endsWith('/equipment') ? {equipment: [{id: 'scope', name: 'Microscope A', category: 'Microscope', active: true}]} : url.endsWith('/staff') ? {staff: []} : url.endsWith('/summary') ? {total: 1, active: 1, resolved: 0} : url === '/api/tickets/7' ? detail : {count: 1, page: 1, page_size: 50, results: [item]}};}};
   vm.runInNewContext(fs.readFileSync('static/js/tickets.js', 'utf8'), context);
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(elements.microscope.children[0].tag, 'optgroup');
-  assert.equal(elements.microscope.children[0].label, 'Microscope');
+  assert.equal(elements.microscope.children[2].tag, 'optgroup');
+  assert.equal(elements.microscope.children[2].label, 'Microscope');
   const row = elements['ticket-rows'].children[0];
   assert.equal(row.children[4].textContent, 'Microscope A');
   assert.equal(row.children[6].textContent, 'Internal issue / Normal');
