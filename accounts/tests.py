@@ -51,6 +51,23 @@ class AccessTests(TestCase):
         self.client.force_login(self.pending)
         self.assertEqual(self.client.get(reverse('storage_filesets')).status_code, 403)
 
+    def test_group_management_requires_an_explicit_revoke_and_admin_page_has_named_group_selector(self):
+        from datetime import timedelta
+        from django.utils import timezone as django_timezone
+        self.pending.role = User.Role.RESEARCHER
+        self.pending.save(update_fields=['role'])
+        VerifiedOmeroGroup.objects.create(user=self.pending, group_id=42, valid_until=django_timezone.localdate() + timedelta(days=30), verified_by=self.admin)
+        self.client.force_login(self.admin)
+        page = self.client.get(reverse('administration'))
+        self.assertContains(page, 'Manage group access')
+        self.assertContains(page, 'class="group-select"')
+        self.assertContains(page, 'account-role-filter')
+        url = reverse('update_omero_group', args=[self.pending.pk])
+        self.assertEqual(self.client.post(url, {}).status_code, 400)
+        self.assertTrue(VerifiedOmeroGroup.objects.filter(user=self.pending, group_id=42).exists())
+        self.assertEqual(self.client.post(url, {'group_id': '42', 'valid_until': (django_timezone.localdate() + timedelta(days=30)).isoformat()}).status_code, 400)
+        self.assertTrue(VerifiedOmeroGroup.objects.filter(user=self.pending, group_id=42).exists())
+
     def test_expired_group_and_admin_endpoints_fail_closed(self):
         from datetime import timedelta
         from django.utils import timezone as django_timezone
@@ -66,6 +83,34 @@ class AccessTests(TestCase):
             self.assertEqual(self.client.post(reverse('create_storage_policy'), data='{}', content_type='application/json').status_code, 403)
             if role == User.Role.RESEARCHER:
                 self.assertEqual(self.client.get(reverse('storage_history')).status_code, 403)
+
+    def test_fileset_details_decode_database_json_and_filter_location_fields(self):
+        self.client.force_login(self.admin)
+        with patch('accounts.views.connection') as database:
+            cursor = database.cursor.return_value.__enter__.return_value
+            cursor.fetchone.return_value = (None, None, 0, None, 0, None, '["image.czi"]', '[{"project_id": 1, "project_name": "Project", "dataset_id": 2, "dataset_name": "Dataset", "client_path": "/secret"}]')
+            response = self.client.get(reverse('fileset_detail', args=[3]))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['source_file_names'], ['image.czi'])
+        self.assertEqual(response.json()['locations'][0]['dataset_name'], 'Dataset')
+        self.assertNotContains(response, '/secret')
+
+    def test_email_draft_is_admin_only(self):
+        for role in (User.Role.RESEARCHER, User.Role.STAFF):
+            self.pending.role = role
+            self.pending.save(update_fields=['role'])
+            self.client.force_login(self.pending)
+            self.assertEqual(self.client.get(reverse('storage_email_draft', args=[1])).status_code, 403)
+            self.assertNotContains(self.client.get(reverse('storage')), 'Generate email', status_code=403 if role == User.Role.RESEARCHER else 200)
+        self.client.force_login(self.admin)
+        with patch('accounts.storage.connection') as database:
+            cursor = database.cursor.return_value.__enter__.return_value
+            from datetime import date
+            cursor.fetchone.return_value = ('Group', date(2026, 1, 1), 10, 5, 2, 'TEMPORARY', 30, 7, 1)
+            cursor.fetchall.return_value = [('Owner person@example.org',), ('PERSON@example.org',)]
+            response = self.client.get(reverse('storage_email_draft', args=[1]))
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()['recipients'], ['person@example.org'])
 
     def test_pending_cannot_use_administration_or_approve(self):
         self.client.force_login(self.pending)

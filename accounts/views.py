@@ -106,6 +106,7 @@ def storage_groups(request):
 
 @require_GET
 def fileset_detail(request, fileset_id):
+    import json
     allowed, group = storage_scope(request.user)
     if not allowed:
         return JsonResponse({'error': 'A verified OMERO group is required.'}, status=403)
@@ -116,12 +117,23 @@ def fileset_detail(request, fileset_id):
             cursor.execute('''SELECT first_seen_at, last_seen_at, uncontained_image_count,
                 missing_since_at, missing_runs, deleted_at,
                 COALESCE((SELECT jsonb_agg(entry.value ->> 'name' ORDER BY entry.ordinal)
-                    FROM jsonb_array_elements(source_files) WITH ORDINALITY AS entry(value, ordinal)), '[]'::jsonb)
+                    FROM jsonb_array_elements(CASE WHEN jsonb_typeof(source_files) = 'array' THEN source_files ELSE '[]'::jsonb END) WITH ORDINALITY AS entry(value, ordinal)), '[]'::jsonb), locations
                 FROM public.omero_fileset WHERE fileset_id = %s''' + (' AND group_id = %s' if group is not None else ''), [fileset_id] + ([group] if group is not None else []))
             row = cursor.fetchone()
         if not row:
             return JsonResponse({'error': 'Fileset not found.'}, status=404)
-        return JsonResponse(dict(zip(('first_seen_at', 'last_seen_at', 'uncontained_image_count', 'missing_since_at', 'missing_runs', 'deleted_at', 'source_file_names'), row)))
+        def array(value):
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except ValueError:
+                    return []
+            return value if isinstance(value, list) else []
+        result = dict(zip(('first_seen_at', 'last_seen_at', 'uncontained_image_count', 'missing_since_at', 'missing_runs', 'deleted_at'), row[:6]))
+        result['source_file_names'] = [name for name in array(row[6]) if isinstance(name, str)]
+        keys = ('project_id', 'project_name', 'dataset_id', 'dataset_name')
+        result['locations'] = [{key: location.get(key) for key in keys} for location in array(row[7]) if isinstance(location, dict)]
+        return JsonResponse(result)
     except DatabaseError:
         return JsonResponse({'error': 'Fileset details are currently unavailable.'}, status=503)
 
@@ -162,6 +174,24 @@ def storage_admin_data(request, kind):
         return JsonResponse({'rows': admin_table(kind)})
     except DatabaseError:
         return JsonResponse({'error': 'Storage data is currently unavailable.'}, status=503)
+
+
+@require_GET
+def storage_email_draft(request, group_id):
+    if not is_dashboard_admin(request.user):
+        return JsonResponse({'error': 'Administrator access required.'}, status=403)
+    if not 1 <= group_id <= 9223372036854775807:
+        return JsonResponse({'error': 'Group not found.'}, status=404)
+    from .storage import email_draft
+    try:
+        result = email_draft(group_id)
+        if not result:
+            return JsonResponse({'error': 'No storage snapshot exists for this group.'}, status=404)
+        if not result['policy_type']:
+            return JsonResponse({'error': 'No storage policy applies to this snapshot.'}, status=409)
+        return JsonResponse(result)
+    except DatabaseError:
+        return JsonResponse({'error': 'Email draft is currently unavailable.'}, status=503)
 
 
 @require_POST
@@ -367,6 +397,8 @@ def update_omero_group(request, user_id):
     from django.utils import timezone
     if not is_dashboard_admin(request.user):
         return HttpResponseForbidden('Administrator access required.')
+    if 'group_id' not in request.POST:
+        return HttpResponseBadRequest('Select a group or explicitly revoke group access.')
     target = get_object_or_404(User, pk=user_id)
     group_id = request.POST.get('group_id', '').strip()
     until = request.POST.get('valid_until', '')

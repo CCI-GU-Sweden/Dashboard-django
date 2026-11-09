@@ -28,7 +28,7 @@ spec:
               client = Client(HTTP_HOST='dashboard-django-test.apps.k8s.gu.se')
               client.force_login(user)
               try:
-                  for path in ['/', '/uploads/', '/storage/', '/tickets/', '/storage/billing/', '/api/uploads/summary', '/api/uploads/summary?metric=total_file_size_mb&period=30', '/api/uploads/scopes', '/api/omero/filesets', '/api/omero/groups', '/api/omero/history', '/api/omero/overview', '/api/omero/admin/policies', '/api/omero/admin/health', '/api/tickets', '/api/tickets/summary', '/api/tickets/equipment', '/api/omero/billing?startDate=2026-01-01&endDate=2026-02-01']:
+                  for path in ['/', '/uploads/', '/storage/', '/administration/', '/tickets/', '/storage/billing/', '/api/uploads/summary', '/api/uploads/summary?metric=total_file_size_mb&period=30', '/api/uploads/scopes', '/api/omero/filesets', '/api/omero/groups', '/api/omero/history', '/api/omero/overview', '/api/omero/admin/policies', '/api/omero/admin/health', '/api/tickets', '/api/tickets/summary', '/api/tickets/equipment', '/api/omero/billing?startDate=2026-01-01&endDate=2026-02-01']:
                       response = client.get(path, secure=True)
                       print(path, response.status_code, flush=True)
                       if response.status_code != 200:
@@ -37,6 +37,24 @@ spec:
                           raise RuntimeError('Upload chart data is missing.')
                   import json, uuid
                   from django.db import connection, transaction
+                  with connection.cursor() as cursor:
+                      cursor.execute('SELECT fileset_id FROM public.omero_fileset ORDER BY fileset_id LIMIT 1')
+                      sample_fileset = cursor.fetchone()
+                      cursor.execute('''SELECT s.group_id FROM public.group_storage_snapshot s
+                          JOIN public.storage_policy p ON p.group_id = s.group_id AND p.valid_from <= s.snapshot_date
+                          AND (p.valid_until IS NULL OR p.valid_until >= s.snapshot_date)
+                          ORDER BY s.snapshot_date DESC LIMIT 1''')
+                      email_group = cursor.fetchone()
+                  if sample_fileset:
+                      response = client.get('/api/omero/filesets/' + str(sample_fileset[0]), secure=True)
+                      print('fileset details:', response.status_code, flush=True)
+                      if response.status_code != 200 or not isinstance(response.json()['source_file_names'], list) or not isinstance(response.json()['locations'], list):
+                          raise RuntimeError('Fileset details smoke test failed.')
+                  if email_group:
+                      response = client.get('/api/omero/groups/' + str(email_group[0]) + '/email-draft', secure=True)
+                      print('email draft:', response.status_code, flush=True)
+                      if response.status_code != 200 or not isinstance(response.json()['recipients'], list):
+                          raise RuntimeError('Email draft smoke test failed.')
                   with transaction.atomic():
                       payload = {'reporter_name': 'Rollback smoke test', 'reporter_identifier': 'test@example.org', 'microscope': '', 'message': 'Temporary rollback test', 'ticket_type': 'USER_REQUEST', 'issue_type': '', 'priority': 'NORMAL', 'source_event_id': str(uuid.uuid4())}
                       with connection.cursor() as cursor:
@@ -83,6 +101,9 @@ spec:
                       from accounts.models import VerifiedOmeroGroup
                       researcher = User.objects.create_user(username='smoke-' + uuid.uuid4().hex, role=User.Role.RESEARCHER)
                       VerifiedOmeroGroup.objects.create(user=researcher, group_id=9223372036854775806, valid_until=date.today() + timedelta(days=1), verified_by=user)
+                      admin_page = client.get('/administration/', secure=True)
+                      if admin_page.status_code != 200 or b'class="group-select"' not in admin_page.content:
+                          raise RuntimeError('Researcher group selector is missing.')
                       scoped = Client(HTTP_HOST='dashboard-django-test.apps.k8s.gu.se')
                       scoped.force_login(researcher)
                       for path in ['/api/omero/filesets?group_id=1', '/api/omero/history?group_id=1', '/api/omero/groups']:

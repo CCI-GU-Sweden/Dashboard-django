@@ -13,6 +13,7 @@ urlpatterns = [
     path('api/omero/filesets', views.storage_filesets, name='storage_filesets'),
     path('api/omero/filesets/<int:fileset_id>', views.fileset_detail, name='fileset_detail'),
     path('api/omero/groups', views.storage_groups, name='storage_groups'),
+    path('api/omero/groups/<int:group_id>/email-draft', views.storage_email_draft, name='storage_email_draft'),
     path('api/omero/history', views.storage_history, name='storage_history'),
     path('api/omero/overview', views.storage_overview, name='storage_overview'),
     path('api/omero/policies', views.create_storage_policy, name='create_storage_policy'),

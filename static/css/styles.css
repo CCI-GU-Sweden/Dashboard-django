@@ -756,6 +756,45 @@ tr.details-open .policy-history-button i {
 
 .researcher-storage { grid-template-columns: minmax(0, 1fr); }
 
+.dashboard-content.administration-view { max-width: none; width: 100%; padding: 1.5rem; }
+.administration-header, .admin-panel-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem; }
+.administration-header { margin-bottom: 1.5rem; }
+.administration-header .title, .admin-panel-heading .title { margin-bottom: .4rem; }
+.admin-panel { display: block; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem; }
+.admin-panel-heading { margin-bottom: 1.25rem; }
+.admin-filters { display: flex; align-items: flex-end; flex-wrap: wrap; gap: .8rem; margin-bottom: 1rem; }
+.admin-filters label, .group-form > label:not(.group-verification) { display: flex; flex-direction: column; gap: .35rem; color: var(--muted); font-size: .76rem; font-weight: 700; }
+.admin-filters label:first-child { flex: 1 1 260px; }
+.admin-filters .select, .group-form .select { font-size: 1rem; }
+.admin-table-wrap { overflow-x: auto; }
+.admin-accounts { min-width: 920px; }
+.admin-accounts th, .admin-accounts td { vertical-align: top; }
+.admin-accounts th { color: var(--muted); font-size: .75rem; text-transform: uppercase; }
+.admin-accounts td small { color: var(--muted); }
+.group-editor { margin-top: .45rem; min-width: 260px; }
+.group-editor summary, .audit-panel summary { color: var(--blue); cursor: pointer; }
+.group-form { display: grid; gap: .6rem; margin: .75rem 0; }
+.group-form .select, .group-form .select select { width: 100%; }
+.group-verification { font-size: .8rem; line-height: 1.4; }
+.group-form button, .group-revoke button { justify-self: start; }
+.group-revoke { margin-bottom: .5rem; }
+.audit-panel summary { margin-bottom: .5rem; }
+.policy-history { padding: 1rem; background: #f8fafc; border-left: 3px solid var(--blue); }
+.policy-history-table { margin-top: .5rem; }
+
+.dashboard-content.storage-view { max-width: none; width: 100%; padding: 1.25rem 1.5rem 1.5rem; }
+.storage-view .fileset-heading-actions .fileset-search { width: auto; max-width: none; }
+.storage-view .fileset-filters label { display: flex; flex-direction: column; gap: 0.35rem; color: var(--muted); font-size: 0.76rem; font-weight: 700; }
+.storage-view .fileset-filters .select { font-size: 1rem; font-weight: 400; color: var(--ink); }
+.storage-view .fileset-detail-button { border: 0; background: transparent; color: var(--blue); font-size: 1.5rem; line-height: 1; cursor: pointer; }
+.storage-view .fileset-status { display: inline-block; padding: 0.2rem 0.55rem; border-radius: 999px; font-size: 0.72rem; font-weight: 700; }
+.storage-view .fileset-status.is-active { background: #dcfce7; color: #166534; }
+.storage-view .fileset-status.is-deleted { background: #fee2e2; color: #991b1b; }
+.storage-view .email-dialog { width: min(880px, calc(100vw - 2rem)); max-height: 90vh; border: 1px solid var(--line); border-radius: 12px; padding: 1.5rem; }
+.storage-view .email-dialog::backdrop { background: rgba(20, 33, 61, .5); }
+.storage-view .email-dialog label { display: block; margin-top: 1rem; font-weight: 600; }
+.storage-view .email-dialog input, .storage-view .email-dialog textarea { margin-top: .35rem; font-weight: 400; }
+
 .fileset-heading,
 .fileset-filters {
   display: flex;

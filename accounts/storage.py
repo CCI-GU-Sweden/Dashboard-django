@@ -64,7 +64,10 @@ def list_filesets(params, allowed_group=None):
 
 def list_groups(allowed_group=None):
     with connection.cursor() as cursor:
-        cursor.execute('SELECT group_id, MAX(group_name) FROM public.omero_fileset WHERE group_id IS NOT NULL' + (' AND group_id = %s' if allowed_group is not None else '') + ' GROUP BY group_id ORDER BY 2, group_id', [allowed_group] if allowed_group is not None else [])
+        cursor.execute('''SELECT group_id, (ARRAY_AGG(group_name ORDER BY source_priority, observed_on DESC NULLS LAST))[1]
+            FROM (SELECT group_id, group_name, snapshot_date AS observed_on, 0 AS source_priority FROM public.group_storage_snapshot
+                  UNION ALL SELECT group_id, group_name, imported_at::date AS observed_on, 1 AS source_priority FROM public.omero_fileset) groups
+            WHERE group_id IS NOT NULL''' + (' AND group_id = %s' if allowed_group is not None else '') + ' GROUP BY group_id ORDER BY 2, group_id', [allowed_group] if allowed_group is not None else [])
         return [{'id': str(row[0]), 'name': row[1]} for row in cursor.fetchall()]
 
 
@@ -159,4 +162,35 @@ def admin_table(kind):
     with connection.cursor() as cursor:
         cursor.execute(queries[kind])
         names = [column[0] for column in cursor.description]
-        return [dict(zip(names, row)) for row in cursor.fetchall()]
+        rows = [dict(zip(names, row)) for row in cursor.fetchall()]
+        if kind == 'policies':
+            for row in rows:
+                row['group_id'] = str(row['group_id'])
+        return rows
+
+
+def email_draft(group_id):
+    import re
+    with connection.cursor() as cursor:
+        cursor.execute('''SELECT s.group_name, s.snapshot_date, s.total_bytes::numeric / 1000000000,
+            s.billable_bytes::numeric / 1000000000, s.daily_charge_ore::numeric / 100,
+            p.policy_type, p.grace_days, p.billing_grace_days, p.rate_ore_per_gb_day
+            FROM public.group_storage_snapshot s
+            LEFT JOIN LATERAL (SELECT policy_type, grace_days, billing_grace_days, rate_ore_per_gb_day
+                FROM public.storage_policy WHERE group_id = s.group_id AND valid_from <= s.snapshot_date
+                AND (valid_until IS NULL OR valid_until >= s.snapshot_date) ORDER BY valid_from DESC LIMIT 1) p ON true
+            WHERE s.group_id = %s ORDER BY s.snapshot_date DESC LIMIT 1''', [group_id])
+        row = cursor.fetchone()
+        if not row:
+            return None
+        cursor.execute('SELECT DISTINCT username FROM public.omero_fileset WHERE group_id = %s AND deleted_at IS NULL AND username IS NOT NULL ORDER BY username', [group_id])
+        owners = cursor.fetchall()
+    pattern = re.compile(r"[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+", re.I)
+    recipients = {}
+    for owner in owners:
+        for email in pattern.findall(owner[0]):
+            recipients.setdefault(email.lower(), email)
+    return {'group_name': row[0], 'snapshot_date': row[1], 'total_gb': float(row[2] or 0),
+            'billable_gb': float(row[3] or 0), 'daily_sek': float(row[4] or 0), 'policy_type': row[5],
+            'grace_days': row[6], 'billing_grace_days': row[7], 'rate': float(row[8] or 0),
+            'recipients': sorted(recipients.values(), key=str.lower)}
