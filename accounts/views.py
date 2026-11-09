@@ -286,21 +286,29 @@ def tickets(request):
 def ticket_inventory(request):
     if not operational_access(request.user):
         return JsonResponse({'error': 'Staff access required.'}, status=403)
-    from .tickets import InvalidTicketFilters, TicketConflict, TicketCreateForm, create_ticket, list_tickets
+    from .tickets import InvalidTicketFilters, TicketConflict, TicketCreateForm, create_ticket, list_tickets, validate_images
     try:
         if request.method == 'POST':
             import json
-            try:
-                data = json.loads(request.body)
-            except (ValueError, UnicodeDecodeError):
-                return JsonResponse({'error': 'Invalid ticket data.'}, status=400)
+            images = []
+            if request.content_type == 'multipart/form-data':
+                if set(request.FILES) - {'images'}:
+                    return JsonResponse({'error': 'Invalid ticket files.'}, status=400)
+                data = request.POST.dict()
+                data.pop('csrfmiddlewaretoken', None)
+                images = validate_images(request.FILES.getlist('images'))
+            else:
+                try:
+                    data = json.loads(request.body)
+                except (ValueError, UnicodeDecodeError):
+                    return JsonResponse({'error': 'Invalid ticket data.'}, status=400)
             allowed = set(TicketCreateForm.base_fields)
             if not isinstance(data, dict) or set(data) - allowed:
                 return JsonResponse({'error': 'Invalid ticket data.'}, status=400)
             form = TicketCreateForm(data)
             if not form.is_valid():
                 return JsonResponse({'error': 'Check the ticket fields.', 'fields': form.errors.get_json_data()}, status=400)
-            result, created = create_ticket(form, request.user)
+            result, created = create_ticket(form, request.user, images)
             return JsonResponse(result, status=201 if created else 200)
         return JsonResponse(list_tickets(request.GET))
     except InvalidTicketFilters as exc:
@@ -325,6 +333,14 @@ def ticket_equipment(request):
 
 
 @require_GET
+def ticket_staff(request):
+    if not operational_access(request.user):
+        return JsonResponse({'error': 'Staff access required.'}, status=403)
+    staff = User.objects.filter(is_active=True, role__in=(User.Role.STAFF, User.Role.ADMIN)).order_by('first_name', 'last_name', 'username')
+    return JsonResponse({'staff': [{'id': str(person.pk), 'name': person.get_full_name() or person.username} for person in staff]})
+
+
+@require_GET
 def ticket_summary(request):
     if not operational_access(request.user):
         return JsonResponse({'error': 'Staff access required.'}, status=403)
@@ -342,24 +358,32 @@ def ticket_detail(request, ticket_id):
     return render(request, 'ticket_detail.html', {'ticket_id': ticket_id})
 
 
-@require_http_methods(['GET', 'PATCH'])
+@require_http_methods(['GET', 'PATCH', 'POST'])
 def ticket_detail_data(request, ticket_id):
     if not operational_access(request.user):
         return JsonResponse({'error': 'Staff access required.'}, status=403)
-    from .tickets import InvalidTicketFilters, TicketConflict, TicketUpdateForm, read_ticket, update_ticket
+    from .tickets import InvalidTicketFilters, TicketConflict, TicketUpdateForm, read_ticket, update_ticket, validate_images
     try:
-        if request.method == 'PATCH':
+        if request.method in ('PATCH', 'POST'):
             import json
-            try:
-                payload = json.loads(request.body)
-            except (ValueError, UnicodeDecodeError):
-                return JsonResponse({'error': 'Invalid ticket data.'}, status=400)
+            images = []
+            if request.method == 'POST' and request.content_type == 'multipart/form-data':
+                if set(request.FILES) - {'images'}:
+                    return JsonResponse({'error': 'Invalid ticket files.'}, status=400)
+                payload = request.POST.dict()
+                payload.pop('csrfmiddlewaretoken', None)
+                images = validate_images(request.FILES.getlist('images'))
+            else:
+                try:
+                    payload = json.loads(request.body)
+                except (ValueError, UnicodeDecodeError):
+                    return JsonResponse({'error': 'Invalid ticket data.'}, status=400)
             if not isinstance(payload, dict) or set(payload) - set(TicketUpdateForm.base_fields):
                 return JsonResponse({'error': 'Invalid ticket data.'}, status=400)
             form = TicketUpdateForm(payload)
             if not form.is_valid():
                 return JsonResponse({'error': 'Check the ticket fields.', 'fields': form.errors.get_json_data()}, status=400)
-            data = update_ticket(ticket_id, form, request.user)
+            data = update_ticket(ticket_id, form, request.user, images)
         else:
             data = read_ticket(ticket_id)
         return JsonResponse(data) if data else JsonResponse({'error': 'Ticket not found.'}, status=404)

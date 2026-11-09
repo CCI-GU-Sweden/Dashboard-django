@@ -3,6 +3,9 @@ from datetime import date, datetime, time, timedelta
 import hashlib
 import json
 from zoneinfo import ZoneInfo
+from io import BytesIO
+from pathlib import PureWindowsPath
+import warnings
 from django import forms
 from django.db import connection, transaction
 from django.utils import timezone
@@ -33,22 +36,72 @@ class TicketUpdateForm(forms.Form):
     priority = forms.ChoiceField(choices=[(value, value) for value in ('LOW', 'NORMAL', 'HIGH', 'CRITICAL')])
     change_note = forms.CharField(max_length=2000, required=False, strip=True)
     resolution_note = forms.CharField(max_length=2000, required=False, strip=True)
+    issue_type = forms.ChoiceField(required=False, choices=[('', 'Unspecified')] + [(value, value) for value in ('SOFTWARE', 'HARDWARE', 'CONNECTION', 'ACCESS_PERMISSIONS', 'ACQUISITION_IMAGE_QUALITY', 'OTHER')])
+    assigned_to = forms.CharField(max_length=30, required=False, strip=True)
 
 
-def update_ticket(ticket_id, form, user):
+def validate_images(files):
+    from PIL import Image, UnidentifiedImageError
+    if len(files) > 5:
+        raise InvalidTicketFilters('A ticket can contain at most five images.')
+    images = []
+    for upload in files:
+        if not upload.size or upload.size > 5 * 1024 * 1024:
+            raise InvalidTicketFilters('Each image must be non-empty and at most 5 MiB.')
+        raw = upload.read(5 * 1024 * 1024 + 1)
+        if len(raw) != upload.size or len(raw) > 5 * 1024 * 1024:
+            raise InvalidTicketFilters('Invalid image size.')
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter('error', Image.DecompressionBombWarning)
+                with Image.open(BytesIO(raw), formats=('PNG', 'JPEG')) as image:
+                    if image.format not in ('PNG', 'JPEG') or image.width * image.height > 20_000_000 or getattr(image, 'n_frames', 1) != 1:
+                        raise ValueError
+                    image.load()
+                    extension = 'png' if image.format == 'PNG' else 'jpeg'
+        except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError, Image.DecompressionBombWarning):
+            raise InvalidTicketFilters('Upload a valid, single-frame PNG or JPEG image of at most 20 megapixels.') from None
+        stem = PureWindowsPath(upload.name.replace('/', '\\')).stem
+        stem = ''.join('_' if ord(char) < 32 or ord(char) == 127 else char for char in stem).strip()[:240] or 'image'
+        images.append({'filename': f'{stem}.{extension}', 'extension': extension, 'data': raw})
+    return images
+
+
+def add_images(cursor, ticket_id, images):
+    metadata = []
+    for image in images:
+        cursor.execute('''INSERT INTO public.microscope_ticket_image (ticket_id, filename, extension, image_data)
+            VALUES (%s, %s, %s, %s) RETURNING image_id''', [ticket_id, image['filename'], image['extension'], image['data']])
+        metadata.append({'id': str(cursor.fetchone()[0]), 'filename': image['filename']})
+    return metadata
+
+
+def update_ticket(ticket_id, form, user, images=None):
+    from .models import User
+    images = images or []
     data = form.cleaned_data
     if not 1 <= ticket_id <= 9223372036854775807:
         return None
     actor = f'dashboard-user:{user.pk}'
     with transaction.atomic():
         with connection.cursor() as cursor:
-            cursor.execute('SELECT status, priority, resolution_note, version FROM public.microscope_ticket WHERE ticket_id = %s FOR UPDATE', [ticket_id])
+            cursor.execute('SELECT status, priority, resolution_note, version, assigned_to, issue_type FROM public.microscope_ticket WHERE ticket_id = %s FOR UPDATE', [ticket_id])
             old = cursor.fetchone()
             if not old:
                 return None
             if old[3] != data['version']:
                 raise TicketConflict('This ticket changed since you opened it. Reload before saving.')
             status, priority = data['status'], data['priority']
+            assigned = old[4]
+            if 'assigned_to' in form.data:
+                selected = data['assigned_to']
+                if selected:
+                    if not selected.isdecimal() or len(selected) > 19 or int(selected) > 9223372036854775807 or not User.objects.filter(pk=int(selected), is_active=True, role__in=(User.Role.STAFF, User.Role.ADMIN)).exists():
+                        raise InvalidTicketFilters('Select an active staff member or administrator.')
+                    assigned = f'dashboard-user:{int(selected)}'
+                else:
+                    assigned = None
+            issue = (data['issue_type'] or None) if 'issue_type' in form.data else old[5]
             was_closed = old[0] in ('RESOLVED', 'CANCELLED')
             closing = status != old[0] and status in ('RESOLVED', 'CANCELLED')
             reopening = status != old[0] and was_closed
@@ -59,16 +112,27 @@ def update_ticket(ticket_id, form, user):
             if data['resolution_note'] and not closing:
                 raise InvalidTicketFilters('A closing note can only be added when closing a ticket.')
             resolution = (data['resolution_note'] or None) if closing else (None if reopening else old[2])
-            if status == old[0] and priority == old[1] and not data['change_note']:
+            if status == old[0] and priority == old[1] and assigned == old[4] and issue == old[5] and not data['change_note'] and not images:
                 return {'ticket_id': str(ticket_id), 'version': old[3]}
+            if images:
+                cursor.execute('SELECT COUNT(*) FROM public.microscope_ticket_image WHERE ticket_id = %s', [ticket_id])
+                if cursor.fetchone()[0] + len(images) > 5:
+                    raise InvalidTicketFilters('A ticket can contain at most five images.')
             resolved_at = timezone.now() if closing and status == 'RESOLVED' else None
-            cursor.execute('''UPDATE public.microscope_ticket SET status = %s, priority = %s,
+            cursor.execute('''UPDATE public.microscope_ticket SET status = %s, priority = %s, assigned_to = %s, issue_type = %s,
                 resolution_note = %s, resolved_at = CASE WHEN %s THEN %s ELSE resolved_at END,
                 updated_at = now(), updated_by = %s, version = version + 1
                 WHERE ticket_id = %s RETURNING version''',
-                [status, priority, resolution, closing or reopening, resolved_at, actor, ticket_id])
+                [status, priority, assigned, issue, resolution, closing or reopening, resolved_at, actor, ticket_id])
             version = cursor.fetchone()[0]
-            changes = {'status': {'before': old[0], 'after': status}, 'priority': {'before': old[1], 'after': priority}, 'resolution_note': {'before': old[2], 'after': resolution}}
+            changes = {'status': {'before': old[0], 'after': status}, 'priority': {'before': old[1], 'after': priority}, 'resolution_note': {'before': old[2], 'after': resolution}, 'assigned_to': {'before': old[4], 'after': assigned}, 'issue_type': {'before': old[5], 'after': issue}}
+            if images:
+                changes['images_added'] = add_images(cursor, ticket_id, images)
+            if closing and data['change_note']:
+                cursor.execute('''INSERT INTO public.microscope_ticket_event
+                    (ticket_id, event_type, old_status, new_status, note, changes, actor)
+                    VALUES (%s, 'UPDATED', %s, %s, %s, %s::jsonb, %s)''',
+                    [ticket_id, old[0], status, data['change_note'], json.dumps({'update_kind': 'PROGRESS_NOTE'}), actor])
             cursor.execute('''INSERT INTO public.microscope_ticket_event
                 (ticket_id, event_type, old_status, new_status, note, changes, actor)
                 VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s)''',
@@ -76,12 +140,16 @@ def update_ticket(ticket_id, form, user):
     return {'ticket_id': str(ticket_id), 'version': version}
 
 
-def create_ticket(form, user):
+def create_ticket(form, user, images=None):
+    images = images or []
     values = form.cleaned_data
     actor = f'dashboard-user:{user.pk}'
     request_id = str(values['source_event_id'])
     fields = {key: (values[key] or None) for key in ('reporter_name', 'reporter_identifier', 'microscope', 'message', 'ticket_type', 'issue_type', 'priority')}
-    request_hash = hashlib.sha256(json.dumps({'fields': fields, 'actor': actor}, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    hash_payload = {'fields': fields, 'actor': actor}
+    if images:
+        hash_payload['images'] = [[image['filename'], hashlib.sha256(image['data']).hexdigest()] for image in images]
+    request_hash = hashlib.sha256(json.dumps(hash_payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     with transaction.atomic():
         with connection.cursor() as cursor:
             if fields['microscope']:
@@ -105,10 +173,11 @@ def create_ticket(form, user):
                 if not existing or existing[2] != request_hash:
                     raise TicketConflict('This submission has already been used with different data.')
                 return {'ticket_id': str(existing[0]), 'version': existing[1]}, False
+            metadata = add_images(cursor, inserted[0], images)
             cursor.execute('''INSERT INTO public.microscope_ticket_event
                 (ticket_id, event_type, old_status, new_status, note, changes, actor)
                 VALUES (%s, 'CREATED', NULL, 'OPEN', NULL, %s::jsonb, %s)''',
-                [inserted[0], json.dumps({'request_hash': request_hash, 'initial': fields}), actor])
+                [inserted[0], json.dumps({'request_hash': request_hash, 'initial': fields, 'images_added': metadata}), actor])
     return {'ticket_id': str(inserted[0]), 'version': inserted[1]}, True
 
 
@@ -148,13 +217,22 @@ def list_tickets(params):
     if source != 'all':
         conditions.append('source = %s')
         values.append(source)
-    for key, column in (('reporter', 'reporter_name'), ('message', 'message'), ('microscope', 'microscope')):
+    for key, column in (('reporter', 'reporter_name'), ('message', 'message')):
         value = params.get(key, '').strip()
         if len(value) > 200:
             raise InvalidTicketFilters
         if value:
             conditions.append(column + ' ILIKE %s')
             values.append(f'%{value}%')
+    equipment = params.get('microscope', '').strip()
+    if len(equipment) > 150:
+        raise InvalidTicketFilters
+    if equipment == '__facility__':
+        conditions.append('(microscope IS NULL OR microscope = %s)')
+        values.append('')
+    elif equipment:
+        conditions.append('(microscope = %s OR microscope = (SELECT name FROM public.ticket_equipment WHERE equipment_id = %s))')
+        values.extend([equipment, equipment])
     for key, column, allowed in (('priority', 'priority', ('LOW', 'NORMAL', 'HIGH', 'CRITICAL')), ('type', 'ticket_type', ('USER_REQUEST', 'USER_REPORT', 'INTERNAL_ISSUE', 'INCIDENT')), ('issueType', 'issue_type', ('SOFTWARE', 'HARDWARE', 'CONNECTION', 'ACCESS_PERMISSIONS', 'ACQUISITION_IMAGE_QUALITY', 'OTHER'))):
         value = params.get(key, '')
         if value:
@@ -182,10 +260,10 @@ def list_tickets(params):
     with connection.cursor() as cursor:
         cursor.execute('SELECT COUNT(*) FROM public.microscope_ticket' + where, values)
         count = cursor.fetchone()[0]
-        cursor.execute('SELECT ticket_id, reporter_name, microscope, message, status, priority, opened_at, ticket_type, issue_type, assigned_to, resolved_at, updated_at, source FROM public.microscope_ticket' + where + ' ORDER BY ' + sorts[sort] + ' ' + order.upper() + ' NULLS LAST, ticket_id DESC LIMIT %s OFFSET %s', values + [size, (page - 1) * size])
+        cursor.execute('SELECT ticket_id, reporter_name, microscope, message, status, priority, opened_at, ticket_type, issue_type, assigned_to, resolved_at, updated_at, source, (SELECT count(*) FROM public.microscope_ticket_image i WHERE i.ticket_id = public.microscope_ticket.ticket_id) FROM public.microscope_ticket' + where + ' ORDER BY ' + sorts[sort] + ' ' + order.upper() + ' NULLS LAST, ticket_id DESC LIMIT %s OFFSET %s', values + [size, (page - 1) * size])
         rows = cursor.fetchall()
     return {'count': count, 'page': page, 'page_size': size, 'results': [
-        {'ticket_id': str(row[0]), 'reporter_name': row[1], 'microscope': row[2], 'message': row[3], 'status': row[4], 'priority': row[5], 'opened_at': row[6], 'ticket_type': row[7], 'issue_type': row[8], 'assigned_to': row[9], 'resolved_at': row[10], 'updated_at': row[11], 'source': row[12]} for row in rows
+        {'ticket_id': str(row[0]), 'reporter_name': row[1], 'microscope': row[2], 'message': row[3], 'status': row[4], 'priority': row[5], 'opened_at': row[6], 'ticket_type': row[7], 'issue_type': row[8], 'assigned_to': row[9], 'resolved_at': row[10], 'updated_at': row[11], 'source': row[12], 'image_count': row[13]} for row in rows
     ]}
 
 
@@ -212,18 +290,29 @@ def ticket_summary():
 
 
 def read_ticket(ticket_id):
+    from .models import User
     if not 1 <= ticket_id <= 9223372036854775807:
         return None
     with connection.cursor() as cursor:
-        cursor.execute('SELECT ticket_id, reporter_name, reporter_identifier, microscope, message, ticket_type, issue_type, priority, status, opened_at, resolved_at, resolution_note, assigned_to, version FROM public.microscope_ticket WHERE ticket_id = %s', [ticket_id])
+        cursor.execute('SELECT ticket_id, reporter_name, reporter_identifier, microscope, message, ticket_type, issue_type, priority, status, opened_at, resolved_at, resolution_note, assigned_to, version, updated_at FROM public.microscope_ticket WHERE ticket_id = %s', [ticket_id])
         row = cursor.fetchone()
         if not row:
             return None
-        keys = ('ticket_id', 'reporter_name', 'reporter_identifier', 'microscope', 'message', 'ticket_type', 'issue_type', 'priority', 'status', 'opened_at', 'resolved_at', 'resolution_note', 'assigned_to', 'version')
+        keys = ('ticket_id', 'reporter_name', 'reporter_identifier', 'microscope', 'message', 'ticket_type', 'issue_type', 'priority', 'status', 'opened_at', 'resolved_at', 'resolution_note', 'assigned_to', 'version', 'updated_at')
         result = dict(zip(keys, row))
         result['ticket_id'] = str(result['ticket_id'])
         cursor.execute('SELECT event_type, old_status, new_status, note, actor, occurred_at FROM public.microscope_ticket_event WHERE ticket_id = %s ORDER BY occurred_at DESC, event_id DESC LIMIT 100', [ticket_id])
         result['events'] = [dict(zip(('type', 'old_status', 'new_status', 'note', 'actor', 'occurred_at'), event)) for event in cursor.fetchall()]
         cursor.execute('SELECT image_id, filename FROM public.microscope_ticket_image WHERE ticket_id = %s ORDER BY image_id LIMIT 5', [ticket_id])
         result['images'] = [{'id': str(image[0]), 'filename': image[1]} for image in cursor.fetchall()]
+    identities = [event['actor'] for event in result['events']] + [result['assigned_to']]
+    ids = {int(value.split(':', 1)[1]) for value in identities if isinstance(value, str) and value.startswith('dashboard-user:') and value.split(':', 1)[1].isdecimal() and len(value.split(':', 1)[1]) <= 18}
+    names = {person.pk: person.get_full_name() or person.username for person in User.objects.filter(pk__in=ids)}
+    def display(value):
+        if isinstance(value, str) and value.startswith('dashboard-user:') and value.split(':', 1)[1].isdecimal() and len(value.split(':', 1)[1]) <= 18:
+            return names.get(int(value.split(':', 1)[1]), 'Former dashboard user')
+        return value
+    result['assigned_to_name'] = display(result['assigned_to'])
+    for event in result['events']:
+        event['actor'] = display(event['actor'])
     return result

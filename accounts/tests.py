@@ -352,7 +352,7 @@ class AccessTests(TestCase):
             database.cursor.assert_not_called()
             cursor = database.cursor.return_value.__enter__.return_value
             cursor.fetchone.return_value = (1,)
-            cursor.fetchall.return_value = [(1, 'Reporter', 'Scope', 'Issue', 'OPEN', 'NORMAL', None, 'USER_REQUEST', 'OTHER', None, None, None, 'DASHBOARD')]
+            cursor.fetchall.return_value = [(1, 'Reporter', 'Scope', 'Issue', 'OPEN', 'NORMAL', None, 'USER_REQUEST', 'OTHER', None, None, None, 'DASHBOARD', 0)]
             response = self.client.get(reverse('ticket_inventory'))
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json()['results'][0]['status'], 'OPEN')
@@ -422,15 +422,70 @@ class AccessTests(TestCase):
         self.pending.save(update_fields=['role'])
         with patch('accounts.tickets.connection') as database:
             cursor = database.cursor.return_value.__enter__.return_value
-            cursor.fetchone.return_value = ('RESOLVED', 'NORMAL', 'closed', 3)
+            cursor.fetchone.return_value = ('RESOLVED', 'NORMAL', 'closed', 3, None, None)
             self.assertEqual(self.client.patch(reverse('ticket_detail_data', args=[1]), data=json.dumps(payload), content_type='application/json').status_code, 409)
             payload['version'] = 3
             self.assertEqual(self.client.patch(reverse('ticket_detail_data', args=[1]), data=json.dumps(payload), content_type='application/json').status_code, 400)
             payload['change_note'] = 'Needs another look'
-            cursor.fetchone.side_effect = [('RESOLVED', 'NORMAL', 'closed', 3), (4,)]
+            cursor.fetchone.side_effect = [('RESOLVED', 'NORMAL', 'closed', 3, None, None), (4,)]
             result = self.client.patch(reverse('ticket_detail_data', args=[1]), data=json.dumps(payload), content_type='application/json')
             self.assertEqual(result.status_code, 200)
             self.assertEqual(result.json()['version'], 4)
+
+    def test_ticket_image_validation_checks_real_data_limits_and_names(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from io import BytesIO
+        from PIL import Image
+        from .tickets import InvalidTicketFilters, validate_images
+        buffer = BytesIO()
+        Image.new('RGB', (2, 2), 'red').save(buffer, format='PNG')
+        valid = SimpleUploadedFile('sample.png', buffer.getvalue(), content_type='image/png')
+        image = validate_images([valid])[0]
+        self.assertEqual(image['extension'], 'png')
+        self.assertEqual(image['filename'], 'sample.png')
+        with self.assertRaises(InvalidTicketFilters):
+            validate_images([SimpleUploadedFile('fake.png', b'not an image', content_type='image/png')])
+        with self.assertRaises(InvalidTicketFilters):
+            validate_images([SimpleUploadedFile('empty.png', b'')])
+        with self.assertRaises(InvalidTicketFilters):
+            validate_images([SimpleUploadedFile('x.png', buffer.getvalue()) for _ in range(6)])
+
+    def test_ticket_staff_list_and_assignments_exclude_researchers(self):
+        from .tickets import TicketUpdateForm, update_ticket, InvalidTicketFilters
+        self.pending.role = User.Role.RESEARCHER
+        self.pending.save(update_fields=['role'])
+        self.client.force_login(self.pending)
+        self.assertEqual(self.client.get(reverse('ticket_staff')).status_code, 403)
+        self.client.force_login(self.admin)
+        self.assertNotIn(str(self.pending.pk), [item['id'] for item in self.client.get(reverse('ticket_staff')).json()['staff']])
+        form = TicketUpdateForm({'version': 1, 'status': 'OPEN', 'priority': 'NORMAL', 'assigned_to': str(self.pending.pk)})
+        self.assertTrue(form.is_valid())
+        with patch('accounts.tickets.connection') as database:
+            database.cursor.return_value.__enter__.return_value.fetchone.return_value = ('OPEN', 'NORMAL', None, 1, None, None)
+            with self.assertRaises(InvalidTicketFilters):
+                update_ticket(1, form, self.admin)
+
+    def test_ticket_attachment_limit_is_checked_before_update(self):
+        from .tickets import TicketUpdateForm, update_ticket, InvalidTicketFilters
+        form = TicketUpdateForm({'version': 1, 'status': 'OPEN', 'priority': 'NORMAL'})
+        self.assertTrue(form.is_valid())
+        with patch('accounts.tickets.connection') as database:
+            cursor = database.cursor.return_value.__enter__.return_value
+            cursor.fetchone.side_effect = [('OPEN', 'NORMAL', None, 1, None, None), (5,)]
+            with self.assertRaises(InvalidTicketFilters):
+                update_ticket(1, form, self.admin, [{'filename': 'extra.png', 'extension': 'png', 'data': b'data'}])
+            self.assertFalse(any('UPDATE public.microscope_ticket SET' in call.args[0] for call in cursor.execute.call_args_list))
+
+    def test_equipment_filter_uses_exact_equipment_id_and_name(self):
+        self.client.force_login(self.admin)
+        with patch('accounts.tickets.connection') as database:
+            cursor = database.cursor.return_value.__enter__.return_value
+            cursor.fetchone.return_value = (0,)
+            cursor.fetchall.return_value = []
+            response = self.client.get(reverse('ticket_inventory'), {'microscope': 'scope_1'})
+            self.assertEqual(response.status_code, 200)
+            self.assertIn('microscope = %s OR microscope = (SELECT name', cursor.execute.call_args_list[0].args[0])
+            self.assertEqual(cursor.execute.call_args_list[0].args[1][-2:], ['scope_1', 'scope_1'])
 
     def test_new_fileset_controls_are_validated_and_remain_staff_only(self):
         self.pending.role = User.Role.RESEARCHER

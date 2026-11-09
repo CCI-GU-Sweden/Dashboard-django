@@ -85,6 +85,35 @@ spec:
                       print('stale ticket update:', stale.status_code, flush=True)
                       if stale.status_code != 409:
                           raise RuntimeError('Stale ticket update smoke test failed.')
+                      from io import BytesIO
+                      from PIL import Image
+                      from django.core.files.uploadedfile import SimpleUploadedFile
+                      image_buffer = BytesIO()
+                      Image.new('RGB', (2, 2), 'red').save(image_buffer, format='PNG')
+                      image_bytes = image_buffer.getvalue()
+                      upload_payload = dict(payload)
+                      upload_payload['source_event_id'] = str(uuid.uuid4())
+                      upload_payload['images'] = SimpleUploadedFile('smoke.png', image_bytes, content_type='image/png')
+                      uploaded = client.post('/api/tickets', data=upload_payload, secure=True)
+                      print('ticket with image:', uploaded.status_code, flush=True)
+                      if uploaded.status_code != 201:
+                          raise RuntimeError('Ticket attachment creation failed.')
+                      uploaded_id = uploaded.json()['ticket_id']
+                      upload_payload['images'] = SimpleUploadedFile('smoke.png', image_bytes, content_type='image/png')
+                      retry_upload = client.post('/api/tickets', data=upload_payload, secure=True)
+                      if retry_upload.status_code != 200 or retry_upload.json()['ticket_id'] != uploaded_id:
+                          raise RuntimeError('Ticket attachment retry failed.')
+                      update_payload = {'version': '1', 'status': 'IN_PROGRESS', 'priority': 'HIGH', 'issue_type': 'SOFTWARE', 'assigned_to': str(user.pk), 'change_note': 'Image smoke update', 'images': SimpleUploadedFile('second.png', image_bytes, content_type='image/png')}
+                      upload_update = client.post('/api/tickets/' + uploaded_id, data=update_payload, secure=True)
+                      print('ticket image update:', upload_update.status_code, flush=True)
+                      if upload_update.status_code != 200 or upload_update.json()['version'] != 2:
+                          raise RuntimeError('Ticket image update failed.')
+                      ticket_details = client.get('/api/tickets/' + uploaded_id, secure=True)
+                      if ticket_details.status_code != 200 or len(ticket_details.json()['images']) != 2 or ticket_details.json()['assigned_to'] != 'dashboard-user:' + str(user.pk):
+                          raise RuntimeError('Ticket image details or assignment failed.')
+                      image_id = ticket_details.json()['images'][0]['id']
+                      if client.get('/api/tickets/' + uploaded_id + '/images/' + image_id, secure=True).content != image_bytes:
+                          raise RuntimeError('Ticket image retrieval failed.')
                       from datetime import date, timedelta
                       with connection.cursor() as cursor:
                           cursor.execute('SELECT group_id FROM public.storage_policy ORDER BY group_id LIMIT 1')
