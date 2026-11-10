@@ -25,7 +25,7 @@ spec:
               user = User.objects.filter(role=User.Role.ADMIN, is_active=True).first()
               if not user:
                   raise RuntimeError('No active administrator is available for smoke testing.')
-              client = Client(HTTP_HOST='dashboard-django-test.apps.k8s.gu.se')
+              client = Client(HTTP_HOST='dashboard-test-core-omero-test.apps.k8s.gu.se')
               client.force_login(user)
               try:
                   for path in ['/', '/uploads/', '/storage/', '/administration/', '/tickets/', '/storage/billing/', '/api/uploads/summary', '/api/uploads/summary?metric=total_file_size_mb&period=30', '/api/uploads/scopes', '/api/omero/filesets', '/api/omero/groups', '/api/omero/history', '/api/omero/overview', '/api/omero/overview-card', '/api/omero/admin/policies', '/api/omero/admin/health', '/api/tickets', '/api/tickets/summary', '/api/tickets/equipment', '/api/tickets/staff', '/api/tickets/researchers', '/api/omero/billing?startDate=2026-01-01&endDate=2026-02-01']:
@@ -179,7 +179,7 @@ spec:
                       admin_page = client.get('/administration/', secure=True)
                       if admin_page.status_code != 200 or b'class="group-select"' not in admin_page.content:
                           raise RuntimeError('Researcher group selector is missing.')
-                      scoped = Client(HTTP_HOST='dashboard-django-test.apps.k8s.gu.se')
+                      scoped = Client(HTTP_HOST='dashboard-test-core-omero-test.apps.k8s.gu.se')
                       scoped.force_login(researcher)
                       own_summary = scoped.get('/api/tickets/summary', secure=True)
                       if own_summary.status_code != 200 or own_summary.json()['total'] != 0:
@@ -213,7 +213,7 @@ spec:
                       if scoped.post('/api/tickets', data=json.dumps(researcher_payload), content_type='application/json', secure=True).status_code != 403:
                           raise RuntimeError('Revoked researcher creation permission was ignored.')
                       staff_user = User.objects.create_user(username='smoke-staff-' + uuid.uuid4().hex, role=User.Role.STAFF)
-                      staff_client = Client(HTTP_HOST='dashboard-django-test.apps.k8s.gu.se')
+                      staff_client = Client(HTTP_HOST='dashboard-test-core-omero-test.apps.k8s.gu.se')
                       staff_client.force_login(staff_user)
                       staff_payload = dict(researcher_payload, source_event_id=str(uuid.uuid4()))
                       staff_ticket = staff_client.post('/api/tickets', data=json.dumps(staff_payload), content_type='application/json', secure=True)
@@ -225,7 +225,7 @@ spec:
                       if staff_update.status_code != 200:
                           raise RuntimeError('Staff could not update a ticket.')
                       other = User.objects.create_user(username='smoke-other-' + uuid.uuid4().hex, role=User.Role.RESEARCHER)
-                      other_client = Client(HTTP_HOST='dashboard-django-test.apps.k8s.gu.se')
+                      other_client = Client(HTTP_HOST='dashboard-test-core-omero-test.apps.k8s.gu.se')
                       other_client.force_login(other)
                       if other_client.get('/api/tickets/' + created_own.json()['ticket_id'], secure=True).status_code != 404 or other_client.get('/api/tickets/summary', secure=True).json()['total'] != 0:
                           raise RuntimeError('Another researcher accessed linked tickets.')

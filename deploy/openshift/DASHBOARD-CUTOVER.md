@@ -155,9 +155,9 @@ shared database blindly over writes made by other applications.
    Preserve the OMERO and Flask portions unchanged. Coordinate concurrent
    scheduler runs and rollouts.
 4. Maintain the existing Route TLS and IP allowlist, and test allowed and denied
-   networks. Ensure all reachable Routes to the application have equivalent
-   restrictions and scheduling behavior; otherwise the separate Django route
-   can bypass the maintenance page. Keep a restricted operator recovery path.
+   networks. The former direct Django route was removed on 2026-11-10; keep the
+   bookmarked maintenance-gateway route as the application's public route.
+   Keep a restricted operator recovery path.
 5. Test login with the real administrator, pending/approved coworker, ticket
    creation, storage, health probes, scaling and maintenance behavior. Record
    image digest, build revision, secret references, schedule, backup and

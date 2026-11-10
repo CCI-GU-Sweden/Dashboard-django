@@ -104,6 +104,8 @@ items:
                 limits:
                   cpu: 500m
                   memory: 512Mi
+  # The public route is managed separately by 07-route.yaml and points to the
+  # existing maintenance gateway, not directly to this Service.
   - apiVersion: v1
     kind: Service
     metadata:
@@ -115,21 +117,3 @@ items:
         - name: http
           port: 80
           targetPort: http
-  - apiVersion: route.openshift.io/v1
-    kind: Route
-    metadata:
-      name: dashboard-django-test
-      annotations:
-        haproxy.router.openshift.io/ip_whitelist: "192.168.88.0/24 10.248.128.0/24 10.250.0.225/27 10.244.0.0/16 10.250.8.63/32"
-        haproxy.router.openshift.io/set-forwarded-headers: replace
-    spec:
-      # Must match the ConfigMap and the exact registered ORCID callback host.
-      host: dashboard-django-test.apps.k8s.gu.se
-      to:
-        kind: Service
-        name: dashboard-django
-      port:
-        targetPort: http
-      tls:
-        termination: edge
-        insecureEdgeTerminationPolicy: Redirect

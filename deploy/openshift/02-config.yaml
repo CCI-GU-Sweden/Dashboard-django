@@ -4,10 +4,9 @@ metadata:
   name: dashboard-django-config
 data:
   DJANGO_DEBUG: "0"
-  # Confirm this shorter hostname is accepted by the cluster's Route policy.
-  # The additional name is used only in the internal health probe Host header.
-  DJANGO_ALLOWED_HOSTS: dashboard-probe.local,dashboard-django-test.apps.k8s.gu.se
-  DJANGO_CSRF_TRUSTED_ORIGINS: https://dashboard-django-test.apps.k8s.gu.se
+  # The probe name is used only in internal health-check Host headers.
+  DJANGO_ALLOWED_HOSTS: dashboard-probe.local,dashboard-test-core-omero-test.apps.k8s.gu.se
+  DJANGO_CSRF_TRUSTED_ORIGINS: https://dashboard-test-core-omero-test.apps.k8s.gu.se
   # This test Route uses edge TLS and replaces forwarded headers. Re-verify
   # trusted proxy behavior and backend reachability for any other deployment.
   DJANGO_TRUST_PROXY_HTTPS: "1"
