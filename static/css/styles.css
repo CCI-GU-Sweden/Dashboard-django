@@ -1055,6 +1055,10 @@ tr.details-open .fileset-detail-button i {
 .ticket-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 .ticket-dialog input[type=file] { height: auto; font-size: 0.85rem; }
 .ticket-dialog small { color: var(--muted); font-weight: 400; }
+.ticket-dialog #create-form textarea[name="message"] { min-height: 9rem; resize: vertical; }
+.ticket-tag-choices { display: flex; flex-wrap: wrap; gap: .65rem 1.25rem; margin-top: .5rem; }
+.ticket-tag-choices label { display: inline-flex; align-items: center; gap: .4rem; }
+.ticket-tag-choices input { margin: 0; }
 @media (max-width: 1150px) { .ticket-filter-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 750px) {
   .ticket-filter-grid, .ticket-form-grid, .ticket-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

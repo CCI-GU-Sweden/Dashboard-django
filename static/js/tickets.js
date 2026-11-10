@@ -17,9 +17,11 @@
   async function read(url) {const response = await fetch(url, {credentials: 'same-origin'}); if (!response.ok) throw new Error('Ticket data is currently unavailable.'); return response.json();}
   async function details(id) {return read(`/api/tickets/${encodeURIComponent(id)}`);}
   const adminDialog = $('admin-edit-dialog');
+  const tagDialog = $('ticket-tag-dialog');
   function updateButton(id, text = 'Update') {const button = node('button', text, 'button is-small is-light'); button.type = 'button'; button.addEventListener('click', () => openUpdate(id)); return button;}
   function exportLink(id) {const link = node('a', 'Export ZIP', 'button is-small is-light'); link.href = `/api/tickets/${encodeURIComponent(id)}/export`; link.title = 'Download ticket, history and images; review before sharing'; return link;}
   function editButton(id) {const button = node('button', 'Edit details', 'button is-small is-light'); button.type = 'button'; button.addEventListener('click', () => openAdminEdit(id)); return button;}
+  function editTagsButton(id) {const button = node('button', 'Edit tags', 'button is-small is-light'); button.type = 'button'; button.addEventListener('click', () => openTagEditor(id)); return button;}
   function archiveButton(id) {const button = node('button', 'Archive', 'button is-small is-light'); button.type = 'button'; button.addEventListener('click', async () => {
     const reason = window.prompt(`Why should ticket #${id} be archived?`); if (reason === null) return;
     if (!reason.trim() || reason.trim().length > 1000) {status.textContent = 'Enter a reason of up to 1,000 characters.'; return;}
@@ -34,12 +36,8 @@
     const grid = node('div', null, 'ticket-detail-grid');
     for (const [name, value] of [['Original report', data.message], ['Reported by', data.reporter_name], ['Ticket type', friendly(data.ticket_type)], ['Equipment / assigned staff', `${equipmentName(data.microscope)} / ${data.assigned_staff?.length ? data.assigned_staff.map(person => person.name).join(', ') : data.assigned_to_name || assignedName(data.assigned_to)}`], ['Opened / updated (Europe/Stockholm)', `${date(data.opened_at)} / ${date(data.updated_at)}`], ['Closing date', date(data.resolved_at)], ['Resolution / closing note', data.resolution_note || 'No closing note provided']]) field(grid, name, value);
     panel.append(grid);
-    const tagBox = node('div', null, 'ticket-researcher-link'), tagSelect = node('select', null, 'input'); tagSelect.multiple = true; tagSelect.size = 4; tagSelect.setAttribute('aria-label', 'Ticket tags');
-    let expectedTags = ticketTags.map(tag => String(tag.id));
-    availableTags.forEach(tag => {const option = node('option', tag.name); option.value = String(tag.id); option.selected = expectedTags.includes(option.value); tagSelect.append(option);});
-    const saveTags = node('button', 'Save tags', 'button is-small is-light'), tagStatus = node('p', '', 'ticket-help'); saveTags.type = 'button'; tagStatus.setAttribute('role', 'status');
-    saveTags.addEventListener('click', async () => {saveTags.disabled = true; try {const response = await fetch(`/api/tickets/${encodeURIComponent(data.ticket_id)}/tags`, {method: 'PATCH', credentials: 'same-origin', headers: {'Content-Type': 'application/json', 'X-CSRFToken': $('update-form').elements.csrfmiddlewaretoken.value}, body: JSON.stringify({tags: [...tagSelect.selectedOptions].map(option => option.value), expected: expectedTags})}); const result = await ticketResponse(response); expectedTags = result.tags; tagStatus.textContent = 'Tags saved.';} catch (error) {tagStatus.textContent = error.message;} finally {saveTags.disabled = false;}});
-    tagBox.append(node('h4', 'Tags', 'title is-6'), tagSelect, node('p', 'Use Ctrl/Cmd to select multiple tags.', 'ticket-help'), saveTags, tagStatus); panel.append(tagBox);
+    const tagBox = node('div', null, 'ticket-researcher-link');
+    tagBox.append(node('h4', 'Tags', 'title is-6'), node('p', ticketTags.map(tag => tag.name).join(', ') || 'No tags')); if (tagDialog) tagBox.append(editTagsButton(data.ticket_id)); panel.append(tagBox);
     const linkBox = node('div', null, 'ticket-researcher-link'); linkBox.append(node('h4', 'Linked researcher', 'title is-6'));
     linkBox.append(node('p', 'Linking allows this researcher to view the ticket report and status.'));
     const search = document.createElement('input'); search.type = 'search'; search.className = 'input'; search.placeholder = 'Search by name or ORCID'; search.setAttribute('aria-label', 'Search researchers');
@@ -90,7 +88,7 @@
         detailCell.append(detail); row.append(detailCell);
         const values = [item.ticket_id, date(item.opened_at), item.reporter_name, equipmentName(item.microscope), item.message, `${friendly(item.ticket_type)} / ${friendly(item.priority)}`, friendly(item.issue_type), friendly(item.status), item.assigned_staff?.length ? item.assigned_staff.map(person => person.name).join(', ') : assignedName(item.assigned_to), date(item.resolved_at), item.image_count];
         values.forEach((value, index) => {const cell = document.createElement('td'); if (index === 4) cell.className = 'ticket-message-preview'; if (index === 7) cell.append(node('span', value, `ticket-status ticket-status-${String(item.status || '').toLowerCase().replaceAll('_', '-')}`)); else cell.textContent = value ?? '—'; if (index === 4 && item.tags?.length) cell.append(node('div', item.tags.map(tag => tag.name).join(' · '), 'ticket-help')); row.append(cell);});
-        const action = document.createElement('td'); action.append(updateButton(item.ticket_id)); if (adminDialog) action.append(editButton(item.ticket_id)); action.append(exportLink(item.ticket_id), archiveButton(item.ticket_id)); row.append(action); body.append(row);
+        const action = document.createElement('td'); action.className = 'ticket-actions'; action.append(updateButton(item.ticket_id)); if (tagDialog) action.append(editTagsButton(item.ticket_id)); if (adminDialog) action.append(editButton(item.ticket_id)); action.append(exportLink(item.ticket_id), archiveButton(item.ticket_id)); row.append(action); body.append(row);
       }
       status.textContent = `${data.count.toLocaleString()} tickets · Page ${data.page}`; $('previous').disabled = page === 1; $('next').disabled = page * data.page_size >= data.count;
     } catch (error) {if (sequence === inventorySequence) status.textContent = error.message;}
@@ -101,6 +99,7 @@
   document.addEventListener('tickets-archive-changed', () => {load(); loadSummary();});
   $('previous').addEventListener('click', () => {if (page > 1) {page--; load();}}); $('next').addEventListener('click', () => {page++; load();});
   const createForm = $('create-form'), createDialog = $('create-dialog');
+  if ($('clear-create-tags')) $('clear-create-tags').addEventListener('click', () => {for (const option of $('create-tags').options) option.selected = false;});
   $('add-ticket').addEventListener('click', () => {submissionId ||= crypto.randomUUID(); createDialog.showModal();});
   for (const id of ['close-ticket', 'cancel-ticket']) $(id).addEventListener('click', () => createDialog.close());
   createForm.addEventListener('submit', async event => {
@@ -109,6 +108,25 @@
     catch (problem) {error.textContent = problem.message;} finally {button.disabled = false;}
   });
   const updateDialog = $('update-dialog'), updateForm = $('update-form');
+  let tagTicket = null, expectedTags = [];
+  async function openTagEditor(id) {
+    if (!tagDialog) return;
+    try {
+      const [all, current] = await Promise.all([read('/api/tickets/tags'), read(`/api/tickets/${encodeURIComponent(id)}/tags`)]);
+      tagTicket = id; expectedTags = current.tags.map(tag => String(tag.id)); $('ticket-tag-title').textContent = `Edit tags for ticket #${id}`; $('ticket-tag-error').textContent = '';
+      const choices = $('ticket-tag-choices'); choices.replaceChildren();
+      if (!all.tags.length) choices.append(node('p', 'No tags available. Use Manage tags to create one.', 'ticket-help'));
+      for (const tag of all.tags) {const label = document.createElement('label'), input = document.createElement('input'); input.type = 'checkbox'; input.value = String(tag.id); input.checked = expectedTags.includes(input.value); label.append(input, node('span', tag.name)); choices.append(label);}
+      tagDialog.showModal();
+    } catch (error) {status.textContent = error.message;}
+  }
+  if (tagDialog) {
+    for (const id of ['ticket-tag-close', 'ticket-tag-cancel']) $(id).addEventListener('click', () => tagDialog.close());
+    $('ticket-tag-clear').addEventListener('click', () => {for (const input of $('ticket-tag-choices').querySelectorAll('input[type=checkbox]')) input.checked = false;});
+    $('ticket-tag-form').addEventListener('submit', async event => {event.preventDefault(); const button = $('ticket-tag-form').querySelector('[type=submit]'); button.disabled = true; const selected = [...$('ticket-tag-choices').querySelectorAll('input[type=checkbox]:checked')].map(input => input.value);
+      try {await ticketResponse(await fetch(`/api/tickets/${encodeURIComponent(tagTicket)}/tags`, {method: 'PATCH', credentials: 'same-origin', headers: {'Content-Type': 'application/json', 'X-CSRFToken': updateForm.elements.csrfmiddlewaretoken.value}, body: JSON.stringify({tags: selected, expected: expectedTags})})); tagDialog.close(); load();} catch (error) {$('ticket-tag-error').textContent = error.message;} finally {button.disabled = false;}
+    });
+  }
   if (adminDialog) {
     const form = $('admin-edit-form'); let editing = null;
     window.openTicketAdminEdit = async id => {try {const data = await details(id); editing = data; $('admin-edit-title').textContent = `Edit ticket #${id}`; for (const name of ['reporter_name', 'reporter_identifier', 'message', 'resolution_note']) form.elements[name].value = data[name] || ''; form.elements.resolution_note.disabled = !['RESOLVED', 'CANCELLED'].includes(data.status); const eq = $('admin-edit-equipment'); eq.replaceChildren(); const blank = node('option', 'Facility-wide'); blank.value = ''; eq.append(blank); equipment.forEach((name, value) => {const option = node('option', name); option.value = value; eq.append(option);}); if (data.microscope && !equipment.has(data.microscope)) {const option = node('option', `${data.microscope} (current)`); option.value = data.microscope; eq.append(option);} eq.value = data.microscope || ''; const type = $('admin-edit-type'); for (const option of [...type.options]) if (option.dataset.legacy) option.remove(); if (['USER_REPORT', 'INCIDENT'].includes(data.ticket_type)) {const option = node('option', data.ticket_type === 'INCIDENT' ? 'Incident (legacy)' : 'User issue'); option.value = data.ticket_type; option.dataset.legacy = 'true'; type.append(option);} type.value = data.ticket_type; $('admin-edit-error').textContent = ''; adminDialog.showModal();} catch (error) {status.textContent = error.message;}};

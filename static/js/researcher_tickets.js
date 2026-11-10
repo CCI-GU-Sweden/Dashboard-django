@@ -29,6 +29,7 @@
   $('previous').addEventListener('click', () => {if (page > 1) {page--; load();}}); $('next').addEventListener('click', () => {page++; load();});
   const form = $('create-form');
   if (form) {
+    $('clear-create-tags').addEventListener('click', () => {for (const option of $('create-tags').options) option.selected = false;});
     $('add-ticket').addEventListener('click', () => {submissionId ||= crypto.randomUUID(); $('create-dialog').showModal();});
     for (const id of ['close-ticket', 'cancel-ticket']) $(id).addEventListener('click', () => $('create-dialog').close());
     form.addEventListener('submit', async event => {event.preventDefault(); const data = new FormData(form), button = form.querySelector('[type=submit]'); data.set('source_event_id', submissionId); data.set('tags', JSON.stringify([...$('create-tags').selectedOptions].map(option => option.value))); const files = data.getAll('images'); if (files.length && files.every(file => typeof file !== 'string' && !file.name)) data.delete('images'); button.disabled = true; $('create-error').textContent = '';
