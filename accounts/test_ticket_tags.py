@@ -61,3 +61,17 @@ class TicketTagTests(TestCase):
             cursor.fetchall.return_value = []
             self.assertEqual(self.client.get('/api/tickets', {'status': 'all', 'type': 'USER_ISSUE'}).status_code, 200)
             self.assertIn("ticket_type IN ('USER_REQUEST', 'USER_REPORT')", cursor.execute.call_args_list[0].args[0])
+
+    def test_ticket_id_filter_is_exact_and_validated(self):
+        self.client.force_login(self.staff)
+        with patch('accounts.tickets.connection') as database:
+            cursor = database.cursor.return_value.__enter__.return_value
+            cursor.fetchone.return_value = (0,)
+            cursor.fetchall.return_value = []
+            response = self.client.get('/api/tickets', {'ticketId': '7'})
+            self.assertEqual(response.status_code, 200)
+            query, values = cursor.execute.call_args_list[0].args
+            self.assertIn('ticket_id = %s', query)
+            self.assertEqual(values[0], 7)
+            for bad in ('0', '-1', '1.2', '9223372036854775808', '１'):
+                self.assertEqual(self.client.get('/api/tickets', {'ticketId': bad}).status_code, 400)

@@ -6,6 +6,8 @@
   const node = (tag, text, className) => {const el = document.createElement(tag); if (text != null) el.textContent = text; if (className) el.className = className; return el;};
   const date = value => value ? new Intl.DateTimeFormat(undefined, {timeZone: 'Europe/Stockholm', dateStyle: 'medium', timeStyle: 'short'}).format(new Date(value)) : '—';
   let page = 1, submissionId = null, equipment = new Map(), staff = new Map(), researchers = [], availableTags = [], updateTicket = null, inventorySequence = 0;
+  let filterTimer = null;
+  const textFilters = ['search', 'reporter', 'message'];
   function equipmentName(value) {return equipment.get(value) || value || 'Facility-wide';}
   function omitUnselectedImages(payload) {const files = payload.getAll('images'); if (files.length && files.every(file => typeof file !== 'string' && !file.name)) payload.delete('images');}
   function assignedName(value) {if (!value) return 'Unassigned'; return value.startsWith('dashboard-user:') ? staff.get(value.slice(15)) || 'Former staff member' : value;}
@@ -72,7 +74,7 @@
   async function load() {
     const sequence = ++inventorySequence;
     const query = new URLSearchParams({page: String(page)});
-    for (const id of ['search', 'reporter', 'message', 'microscope', 'startDate', 'endDate', 'dateField', 'issueType', 'type', 'priority', 'source', 'sort', 'order', 'tag']) {const value = $(id)?.value; if (value) query.set(id, value);}
+    for (const id of ['search', 'reporter', 'message', 'microscope', 'startDate', 'endDate', 'dateField', 'issueType', 'type', 'priority', 'source', 'sort', 'order', 'tag']) {const value = $(id)?.value?.trim(); if (id === 'search' && /^[0-9]{1,2}$/.test(value || '') && Number(value) > 0) query.set('ticketId', value); else if (value && (!textFilters.includes(id) || value.length >= 3)) query.set(id, value);}
     const selected = $('status').value; if (selected !== 'active') query.set('status', selected);
     status.textContent = 'Loading…';
     try {
@@ -94,10 +96,19 @@
     } catch (error) {if (sequence === inventorySequence) status.textContent = error.message;}
   }
   async function loadSummary() {try {const data = await read('/api/tickets/summary'); for (const key of ['total', 'active', 'resolved']) $(key).textContent = data[key].toLocaleString();} catch { /* Inventory remains usable. */ }}
-  const filters = $('ticket-search'); filters.addEventListener('submit', event => {event.preventDefault(); page = 1; load();}); filters.addEventListener('reset', () => {page = 1; setTimeout(load, 0);});
-  $('refresh').addEventListener('click', () => {load(); loadSummary();});
+  const filters = $('ticket-search');
+  function applyFilters() {clearTimeout(filterTimer); filterTimer = null; page = 1; load();}
+  filters.addEventListener('submit', event => {event.preventDefault(); applyFilters();});
+  filters.addEventListener('reset', () => {clearTimeout(filterTimer); ++inventorySequence; page = 1; filterTimer = setTimeout(applyFilters, 0);});
+  for (const id of textFilters) $(id).addEventListener('input', () => {
+    clearTimeout(filterTimer); ++inventorySequence; page = 1;
+    if (!$(id).value.trim()) applyFilters();
+    else filterTimer = setTimeout(applyFilters, 350);
+  });
+  for (const id of ['status', 'microscope', 'startDate', 'endDate', 'dateField', 'issueType', 'type', 'priority', 'source', 'sort', 'order', 'tag']) $(id)?.addEventListener('change', applyFilters);
+  $('refresh').addEventListener('click', () => {clearTimeout(filterTimer); load(); loadSummary();});
   document.addEventListener('tickets-archive-changed', () => {load(); loadSummary();});
-  $('previous').addEventListener('click', () => {if (page > 1) {page--; load();}}); $('next').addEventListener('click', () => {page++; load();});
+  $('previous').addEventListener('click', () => {if (page > 1) {clearTimeout(filterTimer); page--; load();}}); $('next').addEventListener('click', () => {clearTimeout(filterTimer); page++; load();});
   const createForm = $('create-form'), createDialog = $('create-dialog');
   if ($('clear-create-tags')) $('clear-create-tags').addEventListener('click', () => {for (const option of $('create-tags').options) option.selected = false;});
   $('add-ticket').addEventListener('click', () => {submissionId ||= crypto.randomUUID(); createDialog.showModal();});

@@ -349,6 +349,12 @@ def list_tickets(params, researcher_id=None):
             or date_field not in ('opened_at', 'updated_at', 'resolved_at')):
         raise InvalidTicketFilters
     conditions, values = ['NOT EXISTS (SELECT 1 FROM public.accounts_ticketarchive a WHERE a.ticket_id = public.microscope_ticket.ticket_id)'], []
+    ticket_id = params.get('ticketId', '')
+    if ticket_id:
+        if not ticket_id.isascii() or not ticket_id.isdecimal() or len(ticket_id) > 19 or not 1 <= int(ticket_id) <= 9223372036854775807:
+            raise InvalidTicketFilters
+        conditions.append('ticket_id = %s')
+        values.append(int(ticket_id))
     if researcher_id is not None:
         conditions.append('ticket_id IN (SELECT ticket_id FROM public.accounts_ticketresearcherlink WHERE researcher_id = %s)')
         values.append(researcher_id)
