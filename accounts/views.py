@@ -657,6 +657,130 @@ def ticket_image(request, ticket_id, image_id):
     return response
 
 
+@require_POST
+def ticket_admin_edit(request, ticket_id):
+    import json
+    from .tickets import InvalidTicketFilters, TicketAdminEditForm, TicketConflict, admin_edit_ticket
+    if not is_dashboard_admin(request.user):
+        return JsonResponse({'error': 'Administrator access required.'}, status=403)
+    if not 1 <= ticket_id <= 9223372036854775807:
+        return JsonResponse({'error': 'Ticket not found.'}, status=404)
+    try:
+        payload = json.loads(request.body)
+        if not isinstance(payload, dict) or set(payload) != set(TicketAdminEditForm.base_fields):
+            return JsonResponse({'error': 'Invalid ticket details.'}, status=400)
+        form = TicketAdminEditForm(payload)
+        if not form.is_valid():
+            return ticket_form_error(form)
+        result = admin_edit_ticket(ticket_id, form, request.user)
+        return JsonResponse(result) if result else JsonResponse({'error': 'Ticket not found.'}, status=404)
+    except TicketConflict as exc:
+        return JsonResponse({'error': str(exc)}, status=409)
+    except InvalidTicketFilters as exc:
+        return JsonResponse({'error': str(exc)}, status=400)
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({'error': 'Invalid ticket details.'}, status=400)
+    except DatabaseError:
+        return JsonResponse({'error': 'Ticket data is currently unavailable.'}, status=503)
+
+
+@require_POST
+def ticket_admin_remove_image(request, ticket_id, image_id):
+    import json
+    if not is_dashboard_admin(request.user):
+        return JsonResponse({'error': 'Administrator access required.'}, status=403)
+    if not 1 <= ticket_id <= 9223372036854775807 or not 1 <= image_id <= 9223372036854775807:
+        return JsonResponse({'error': 'Image not found.'}, status=404)
+    try:
+        payload = json.loads(request.body)
+        version = payload.get('version') if isinstance(payload, dict) and set(payload) == {'version'} else None
+        if not isinstance(version, int) or isinstance(version, bool) or not 1 <= version <= 2147483647:
+            return JsonResponse({'error': 'Invalid ticket version.'}, status=400)
+        with transaction.atomic():
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT status, version FROM public.microscope_ticket WHERE ticket_id = %s FOR UPDATE', [ticket_id])
+                ticket = cursor.fetchone()
+                if not ticket or TicketArchive.objects.filter(ticket_id=ticket_id).exists():
+                    return JsonResponse({'error': 'Ticket not found.'}, status=404)
+                if ticket[1] != version:
+                    return JsonResponse({'error': 'This ticket changed. Reload before removing an image.'}, status=409)
+                cursor.execute('SELECT filename FROM public.microscope_ticket_image WHERE ticket_id = %s AND image_id = %s', [ticket_id, image_id])
+                image = cursor.fetchone()
+                if not image:
+                    return JsonResponse({'error': 'Image not found.'}, status=404)
+                cursor.execute('SELECT public.dashboard_remove_ticket_image(%s, %s)', [ticket_id, image_id])
+                cursor.execute('UPDATE public.microscope_ticket SET updated_at=now(), updated_by=%s, version=version+1 WHERE ticket_id=%s RETURNING version', [f'dashboard-user:{request.user.pk}', ticket_id])
+                version = cursor.fetchone()[0]
+                cursor.execute('''INSERT INTO public.microscope_ticket_event (ticket_id, event_type, old_status, new_status, note, changes, actor)
+                    VALUES (%s, 'UPDATED', %s, %s, %s, %s::jsonb, %s)''',
+                    [ticket_id, ticket[0], ticket[0], 'Administrator removed an image.', json.dumps({'admin_edit': {'image': {'before': image[0], 'after': None}}}), f'dashboard-user:{request.user.pk}'])
+        return JsonResponse({'version': version})
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({'error': 'Invalid request.'}, status=400)
+    except DatabaseError:
+        return JsonResponse({'error': 'Image could not be removed.'}, status=503)
+
+
+@require_GET
+def ticket_export(request, ticket_id):
+    from io import BytesIO
+    from zipfile import ZIP_DEFLATED, ZipFile
+    from .tickets import read_ticket
+    if not operational_access(request.user):
+        return HttpResponseForbidden('Staff access required.')
+    if not 1 <= ticket_id <= 9223372036854775807:
+        return HttpResponse(status=404)
+    try:
+        if not is_dashboard_admin(request.user) and TicketArchive.objects.filter(ticket_id=ticket_id).exists():
+            return HttpResponse(status=404)
+        data = read_ticket(ticket_id, all_events=True)
+        if not data:
+            return HttpResponse(status=404)
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT name FROM public.ticket_equipment WHERE equipment_id = %s', [data['microscope']])
+            equipment_row = cursor.fetchone()
+        equipment_name = equipment_row[0] if equipment_row else data['microscope']
+        tags = list(TicketTagAssignment.objects.filter(ticket_id=ticket_id).order_by('tag__name').values_list('tag__name', flat=True))
+        labels = {'USER_REQUEST': 'User issue', 'USER_REPORT': 'User issue', 'INTERNAL_ISSUE': 'Technical issue', 'INCIDENT': 'Incident (legacy)'}
+        def shown(value):
+            return str(value) if value is not None and value != '' else '—'
+        lines = [f'Ticket #{ticket_id}', '', f'Reporter: {shown(data["reporter_name"])}', f'Contact: {shown(data["reporter_identifier"])}',
+                 f'Equipment: {shown(equipment_name)}', f'Type: {labels.get(data["ticket_type"], shown(data["ticket_type"]))}', f'Tags: {", ".join(tags) or "—"}',
+                 f'Issue type: {shown(data["issue_type"])}', f'Priority: {shown(data["priority"])}', f'Status: {shown(data["status"])}',
+                 f'Assigned staff: {", ".join(person["name"] for person in data["assigned_staff"]) or shown(data["assigned_to_name"])}',
+                 f'Opened: {shown(data["opened_at"])}', f'Updated: {shown(data["updated_at"])}', f'Resolved: {shown(data["resolved_at"])}',
+                 '', 'Report:', shown(data['message']), '', 'Resolution:', shown(data['resolution_note']), '', 'History (newest first):']
+        for event in data['events']:
+            lines.append(f'\n{shown(event["occurred_at"])} · {shown(event["actor"])} · {shown(event["type"])}')
+            if event['old_status'] != event['new_status']:
+                lines.append(f'Status: {shown(event["old_status"])} → {shown(event["new_status"])}')
+            if event['note']:
+                lines.append(event['note'])
+            for key, change in event.get('admin_edit', {}).items():
+                lines.extend([f'{key}:', f'  Before: {shown(change.get("before"))}', f'  After: {shown(change.get("after"))}'])
+        archive = BytesIO()
+        with ZipFile(archive, 'w', ZIP_DEFLATED) as output:
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT image_id, filename, extension, image_data FROM public.microscope_ticket_image WHERE ticket_id = %s ORDER BY image_id', [ticket_id])
+                images = cursor.fetchall()
+            lines.extend(['', 'Attachments:'])
+            for image_id, filename, extension, image_data in images:
+                ext = extension.lower() if extension and extension.lower() in ('png', 'jpg', 'jpeg') else 'bin'
+                path = f'images/ticket-image-{image_id}.{ext}'
+                lines.append(f'{filename} → {path}')
+                output.writestr(path, bytes(image_data))
+            if not images:
+                lines.append('None')
+            output.writestr('ticket.txt', '\n'.join(lines) + '\n')
+        response = HttpResponse(archive.getvalue(), content_type='application/zip')
+        response['Content-Disposition'] = f'attachment; filename="ticket-{ticket_id}.zip"'
+        response['Cache-Control'] = 'private, no-store'
+        response['X-Content-Type-Options'] = 'nosniff'
+        return response
+    except DatabaseError:
+        return HttpResponse('Ticket export is currently unavailable.', status=503)
+
+
 def is_dashboard_admin(user):
     return user.is_authenticated and user.is_active and user.role == User.Role.ADMIN
 

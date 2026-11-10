@@ -26,7 +26,7 @@ test('ticket list groups equipment, formats codes and loads images only on reque
   const row = elements['ticket-rows'].children[0];
   assert.equal(row.children[4].textContent, 'Microscope A');
   assert.equal(row.children[6].textContent, 'Technical issue / Normal');
-  await row.children[12].children[1].listeners.click();
+  await row.children[12].children.at(-1).listeners.click();
   assert.match(elements['ticket-status'].textContent, /Enter a reason/);
   assert.equal(requests.some(url => url.includes('archive-action')), false);
   await row.children[0].children[0].listeners.click();

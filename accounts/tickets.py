@@ -24,7 +24,7 @@ class TicketCreateForm(forms.Form):
     reporter_identifier = forms.EmailField(max_length=254)
     microscope = forms.CharField(max_length=150, required=False, strip=True)
     message = forms.CharField(max_length=20000, strip=True)
-    ticket_type = forms.ChoiceField(choices=[(value, value) for value in ('USER_REQUEST', 'USER_REPORT', 'INTERNAL_ISSUE', 'INCIDENT')])
+    ticket_type = forms.ChoiceField(choices=[(value, value) for value in ('USER_REQUEST', 'USER_REPORT', 'INTERNAL_ISSUE')])
     issue_type = forms.ChoiceField(required=False, choices=[('', 'Unspecified')] + [(value, value) for value in ('SOFTWARE', 'HARDWARE', 'CONNECTION', 'ACCESS_PERMISSIONS', 'ACQUISITION_IMAGE_QUALITY', 'OTHER')])
     priority = forms.ChoiceField(choices=[(value, value) for value in ('LOW', 'NORMAL', 'HIGH', 'CRITICAL')])
     source_event_id = forms.UUIDField()
@@ -40,6 +40,54 @@ class TicketUpdateForm(forms.Form):
     issue_type = forms.ChoiceField(required=False, choices=[('', 'Unspecified')] + [(value, value) for value in ('SOFTWARE', 'HARDWARE', 'CONNECTION', 'ACCESS_PERMISSIONS', 'ACQUISITION_IMAGE_QUALITY', 'OTHER')])
     assigned_to = forms.CharField(max_length=30, required=False, strip=True)
     assigned_staff = forms.CharField(max_length=10000, required=False, strip=True)
+
+
+class TicketAdminEditForm(forms.Form):
+    version = forms.IntegerField(min_value=1, max_value=2147483647)
+    reporter_name = forms.CharField(max_length=200, strip=True)
+    reporter_identifier = forms.EmailField(max_length=254)
+    microscope = forms.CharField(max_length=150, required=False, strip=True)
+    message = forms.CharField(max_length=20000, strip=True)
+    ticket_type = forms.ChoiceField(choices=[(value, value) for value in ('USER_REQUEST', 'USER_REPORT', 'INTERNAL_ISSUE', 'INCIDENT')])
+    resolution_note = forms.CharField(max_length=2000, required=False, strip=True)
+
+
+def admin_edit_ticket(ticket_id, form, user):
+    from .models import TicketArchive
+    fields = ('reporter_name', 'reporter_identifier', 'microscope', 'message', 'ticket_type', 'resolution_note')
+    data = form.cleaned_data
+    with transaction.atomic():
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT reporter_name, reporter_identifier, microscope, message, ticket_type, resolution_note, version, status FROM public.microscope_ticket WHERE ticket_id = %s FOR UPDATE', [ticket_id])
+            old = cursor.fetchone()
+            if not old:
+                return None
+            if TicketArchive.objects.filter(ticket_id=ticket_id).exists():
+                raise TicketConflict('Restore this ticket before editing it.')
+            if old[6] != data['version']:
+                raise TicketConflict('This ticket changed since you opened it. Reload before saving.')
+            if data['ticket_type'] == 'INCIDENT' and old[4] != 'INCIDENT':
+                raise InvalidTicketFilters('Incident is no longer available for new classifications.')
+            if data['resolution_note'] and old[7] not in ('RESOLVED', 'CANCELLED'):
+                raise InvalidTicketFilters('A closing note can only be set on a closed ticket.')
+            values = {key: data[key] or None for key in fields}
+            if values['microscope'] and values['microscope'] != old[2]:
+                cursor.execute('SELECT active FROM public.ticket_equipment WHERE equipment_id = %s FOR SHARE', [values['microscope']])
+                equipment = cursor.fetchone()
+                if not equipment or not equipment[0]:
+                    raise InvalidTicketFilters('Select active equipment or keep the current equipment.')
+            changes = {key: {'before': old[i], 'after': values[key]} for i, key in enumerate(fields) if (old[i] or None) != values[key]}
+            if not changes:
+                return {'ticket_id': str(ticket_id), 'version': old[6]}
+            cursor.execute('''UPDATE public.microscope_ticket SET reporter_name=%s, reporter_identifier=%s, microscope=%s,
+                message=%s, ticket_type=%s, resolution_note=%s, updated_at=now(), updated_by=%s, version=version+1
+                WHERE ticket_id=%s RETURNING version''', [*(values[key] for key in fields), f'dashboard-user:{user.pk}', ticket_id])
+            version = cursor.fetchone()[0]
+            cursor.execute('''INSERT INTO public.microscope_ticket_event
+                (ticket_id, event_type, old_status, new_status, note, changes, actor)
+                VALUES (%s, 'UPDATED', %s, %s, %s, %s::jsonb, %s)''',
+                [ticket_id, old[7], old[7], 'Administrator edited ticket details.', json.dumps({'admin_edit': changes}), f'dashboard-user:{user.pk}'])
+    return {'ticket_id': str(ticket_id), 'version': version}
 
 
 def validate_images(files):
@@ -439,7 +487,7 @@ def read_researcher_ticket(ticket_id, researcher_id):
         return result
 
 
-def read_ticket(ticket_id):
+def read_ticket(ticket_id, all_events=False):
     from .models import TicketStaffAssignment, User
     if not 1 <= ticket_id <= 9223372036854775807:
         return None
@@ -451,8 +499,13 @@ def read_ticket(ticket_id):
         keys = ('ticket_id', 'reporter_name', 'reporter_identifier', 'microscope', 'message', 'ticket_type', 'issue_type', 'priority', 'status', 'opened_at', 'resolved_at', 'resolution_note', 'assigned_to', 'version', 'updated_at')
         result = dict(zip(keys, row))
         result['ticket_id'] = str(result['ticket_id'])
-        cursor.execute('SELECT event_type, old_status, new_status, note, actor, occurred_at FROM public.microscope_ticket_event WHERE ticket_id = %s ORDER BY occurred_at DESC, event_id DESC LIMIT 100', [ticket_id])
-        result['events'] = [dict(zip(('type', 'old_status', 'new_status', 'note', 'actor', 'occurred_at'), event)) for event in cursor.fetchall()]
+        cursor.execute('SELECT event_type, old_status, new_status, note, actor, occurred_at, changes FROM public.microscope_ticket_event WHERE ticket_id = %s ORDER BY occurred_at DESC, event_id DESC' + ('' if all_events else ' LIMIT 100'), [ticket_id])
+        result['events'] = []
+        for event in cursor.fetchall():
+            entry = dict(zip(('type', 'old_status', 'new_status', 'note', 'actor', 'occurred_at'), event[:6]))
+            changes = event[6] if len(event) > 6 else None
+            entry['admin_edit'] = changes.get('admin_edit', {}) if isinstance(changes, dict) else {}
+            result['events'].append(entry)
         cursor.execute('SELECT image_id, filename FROM public.microscope_ticket_image WHERE ticket_id = %s ORDER BY image_id LIMIT 5', [ticket_id])
         result['images'] = [{'id': str(image[0]), 'filename': image[1]} for image in cursor.fetchall()]
     identities = [event['actor'] for event in result['events']] + [result['assigned_to']]
