@@ -4,7 +4,7 @@ from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseForbid
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
 
-from .models import AuditEvent, TicketResearcherLink, User, VerifiedOmeroGroup
+from .models import AuditEvent, TicketArchive, TicketResearcherLink, TicketStaffAssignment, User, VerifiedOmeroGroup
 
 
 def live(request):
@@ -438,6 +438,8 @@ def ticket_researcher_link(request, ticket_id):
     if not 1 <= ticket_id <= 9223372036854775807:
         return JsonResponse({'error': 'Ticket not found.'}, status=404)
     try:
+        if TicketArchive.objects.filter(ticket_id=ticket_id).exists():
+            return JsonResponse({'error': 'Ticket not found.'}, status=404)
         if request.method == 'GET':
             with connection.cursor() as cursor:
                 cursor.execute('SELECT 1 FROM public.microscope_ticket WHERE ticket_id = %s', [ticket_id])
@@ -461,6 +463,8 @@ def ticket_researcher_link(request, ticket_id):
                 cursor.execute('SELECT ticket_id FROM public.microscope_ticket WHERE ticket_id = %s FOR UPDATE', [ticket_id])
                 if not cursor.fetchone():
                     return JsonResponse({'error': 'Ticket not found.'}, status=404)
+            if TicketArchive.objects.filter(ticket_id=ticket_id).exists():
+                return JsonResponse({'error': 'Ticket is archived.'}, status=409)
             existing = TicketResearcherLink.objects.filter(ticket_id=ticket_id).first()
             previous = str(existing.researcher_id) if existing else None
             if previous != expected:
@@ -514,6 +518,8 @@ def ticket_detail_data(request, ticket_id):
         return JsonResponse({'error': 'Staff access required.'}, status=403)
     from .tickets import InvalidTicketFilters, TicketConflict, TicketUpdateForm, read_ticket, update_ticket
     try:
+        if request.method == 'GET' and not is_dashboard_admin(request.user) and TicketArchive.objects.filter(ticket_id=ticket_id).exists():
+            return JsonResponse({'error': 'Ticket not found.'}, status=404)
         if request.method in ('PATCH', 'POST'):
             import json
             images = []
@@ -549,6 +555,8 @@ def ticket_image(request, ticket_id, image_id):
     if not 1 <= ticket_id <= 9223372036854775807 or not 1 <= image_id <= 9223372036854775807:
         return HttpResponse(status=404)
     try:
+        if not is_dashboard_admin(request.user) and TicketArchive.objects.filter(ticket_id=ticket_id).exists():
+            return HttpResponse(status=404)
         with connection.cursor() as cursor:
             query = 'SELECT image_data, extension FROM public.microscope_ticket_image WHERE ticket_id = %s AND image_id = %s'
             values = [ticket_id, image_id]
@@ -570,6 +578,87 @@ def ticket_image(request, ticket_id, image_id):
 
 def is_dashboard_admin(user):
     return user.is_authenticated and user.is_active and user.role == User.Role.ADMIN
+
+
+@require_GET
+def archived_tickets(request):
+    if not is_dashboard_admin(request.user):
+        return JsonResponse({'error': 'Administrator access required.'}, status=403)
+    try:
+        page = int(request.GET.get('page', '1'))
+        if not 1 <= page <= 1000000:
+            raise ValueError
+    except ValueError:
+        return JsonResponse({'error': 'Invalid page.'}, status=400)
+    try:
+        archives = list(TicketArchive.objects.select_related('archived_by').order_by('-archived_at', '-ticket_id')[(page - 1) * 50:page * 50 + 1])
+        more = len(archives) > 50
+        archives = archives[:50]
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT ticket_id, reporter_name, message, status FROM public.microscope_ticket WHERE ticket_id = ANY(%s)', [[a.ticket_id for a in archives]])
+            tickets = {row[0]: row[1:] for row in cursor.fetchall()}
+        results = []
+        for item in archives:
+            ticket = tickets.get(item.ticket_id)
+            if ticket:
+                results.append({'ticket_id': str(item.ticket_id), 'reporter': ticket[0], 'message': ticket[1], 'status': ticket[2], 'reason': item.reason, 'archived_at': item.archived_at, 'archived_by': item.archived_by.get_full_name() or item.archived_by.username})
+        return JsonResponse({'results': results, 'page': page, 'has_next': more})
+    except DatabaseError:
+        return JsonResponse({'error': 'Archived tickets are currently unavailable.'}, status=503)
+
+
+@require_POST
+def ticket_archive_action(request, ticket_id, action):
+    import json
+    if not operational_access(request.user) or (action != 'archive' and not is_dashboard_admin(request.user)):
+        return JsonResponse({'error': 'Administrator access required.' if action != 'archive' else 'Staff access required.'}, status=403)
+    if action not in ('archive', 'restore', 'delete') or not 1 <= ticket_id <= 9223372036854775807:
+        return JsonResponse({'error': 'Ticket not found.'}, status=404)
+    try:
+        payload = json.loads(request.body or b'{}')
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({'error': 'Invalid request.'}, status=400)
+    if not isinstance(payload, dict):
+        return JsonResponse({'error': 'Invalid request.'}, status=400)
+    reason = payload.get('reason')
+    if action == 'archive' and (not isinstance(reason, str) or not reason.strip() or len(reason.strip()) > 1000):
+        return JsonResponse({'error': 'Enter a reason of up to 1,000 characters.'}, status=400)
+    if action == 'delete' and payload.get('confirm_ticket_id') != str(ticket_id):
+        return JsonResponse({'error': 'Enter the ticket number to confirm permanent deletion.'}, status=400)
+    try:
+        with transaction.atomic():
+            if not lock_ticket_for_archive(ticket_id):
+                return JsonResponse({'error': 'Ticket not found.'}, status=404)
+            archived = TicketArchive.objects.filter(ticket_id=ticket_id).first()
+            if action == 'archive':
+                if archived:
+                    return JsonResponse({'error': 'Ticket is already archived.'}, status=409)
+                reason = reason.strip()
+                TicketArchive.objects.create(ticket_id=ticket_id, reason=reason, archived_by=request.user)
+            else:
+                if not archived:
+                    return JsonResponse({'error': 'Only archived tickets can be restored or deleted.'}, status=409)
+                reason = archived.reason
+                if action == 'delete':
+                    purge_archived_ticket(ticket_id)
+                    TicketResearcherLink.objects.filter(ticket_id=ticket_id).delete()
+                    TicketStaffAssignment.objects.filter(ticket_id=ticket_id).delete()
+                archived.delete()
+            AuditEvent.objects.create(actor=request.user, target=request.user, action='ticket_' + {'archive': 'archived', 'restore': 'restored', 'delete': 'deleted'}[action], before={'ticket_id': str(ticket_id)}, after={'reason': reason})
+        return JsonResponse({'ok': True})
+    except DatabaseError:
+        return JsonResponse({'error': 'Ticket action is currently unavailable.'}, status=503)
+
+
+def lock_ticket_for_archive(ticket_id):
+    with connection.cursor() as cursor:
+        cursor.execute('SELECT ticket_id FROM public.microscope_ticket WHERE ticket_id = %s FOR UPDATE', [ticket_id])
+        return bool(cursor.fetchone())
+
+
+def purge_archived_ticket(ticket_id):
+    with connection.cursor() as cursor:
+        cursor.execute('SELECT public.dashboard_purge_archived_ticket(%s)', [ticket_id])
 
 
 @login_required

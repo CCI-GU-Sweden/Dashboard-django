@@ -78,7 +78,7 @@ def add_images(cursor, ticket_id, images):
 
 
 def update_ticket(ticket_id, form, user, images=None):
-    from .models import TicketStaffAssignment, User
+    from .models import TicketArchive, TicketStaffAssignment, User
     images = images or []
     data = form.cleaned_data
     if not 1 <= ticket_id <= 9223372036854775807:
@@ -90,6 +90,8 @@ def update_ticket(ticket_id, form, user, images=None):
             old = cursor.fetchone()
             if not old:
                 return None
+            if TicketArchive.objects.filter(ticket_id=ticket_id).exists():
+                raise TicketConflict('This ticket is archived. Ask an administrator to restore it first.')
             if old[3] != data['version']:
                 raise TicketConflict('This ticket changed since you opened it. Reload before saving.')
             status, priority = data['status'], data['priority']
@@ -281,7 +283,7 @@ def list_tickets(params, researcher_id=None):
             or order not in ('asc', 'desc') or source not in ('all', 'CONTACT_FORM', 'DASHBOARD')
             or date_field not in ('opened_at', 'updated_at', 'resolved_at')):
         raise InvalidTicketFilters
-    conditions, values = [], []
+    conditions, values = ['NOT EXISTS (SELECT 1 FROM public.accounts_ticketarchive a WHERE a.ticket_id = public.microscope_ticket.ticket_id)'], []
     if researcher_id is not None:
         conditions.append('ticket_id IN (SELECT ticket_id FROM public.accounts_ticketresearcherlink WHERE researcher_id = %s)')
         values.append(researcher_id)
@@ -347,7 +349,9 @@ def list_tickets(params, researcher_id=None):
 
 def ticket_summary(researcher_id=None):
     with connection.cursor() as cursor:
-        restriction = ' WHERE ticket_id IN (SELECT ticket_id FROM public.accounts_ticketresearcherlink WHERE researcher_id = %s)' if researcher_id is not None else ''
+        restriction = ' WHERE NOT EXISTS (SELECT 1 FROM public.accounts_ticketarchive a WHERE a.ticket_id = public.microscope_ticket.ticket_id)'
+        if researcher_id is not None:
+            restriction += ' AND ticket_id IN (SELECT ticket_id FROM public.accounts_ticketresearcherlink WHERE researcher_id = %s)'
         cursor.execute('''
             WITH scoped AS (SELECT * FROM public.microscope_ticket''' + restriction + '''),
             clock AS (SELECT now() AS current_time, now() - interval '30 days' AS cutoff, now() - interval '60 days' AS earlier),
@@ -389,7 +393,8 @@ def read_researcher_ticket(ticket_id, researcher_id):
         cursor.execute('''SELECT t.ticket_id, t.reporter_name, t.microscope, t.message, t.ticket_type, t.status,
             t.opened_at, t.resolved_at, t.updated_at, t.created_by, t.resolution_note
             FROM public.microscope_ticket t JOIN public.accounts_ticketresearcherlink l ON l.ticket_id = t.ticket_id
-            WHERE t.ticket_id = %s AND l.researcher_id = %s''', [ticket_id, researcher_id])
+            WHERE t.ticket_id = %s AND l.researcher_id = %s
+            AND NOT EXISTS (SELECT 1 FROM public.accounts_ticketarchive a WHERE a.ticket_id = t.ticket_id)''', [ticket_id, researcher_id])
         row = cursor.fetchone()
         if not row:
             return None

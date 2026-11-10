@@ -1,0 +1,11 @@
+{% load static %}
+<dialog id="archive-dialog" class="ticket-dialog" aria-labelledby="archive-title">
+  <header><h2 id="archive-title" class="title is-4">Archived tickets</h2><button id="close-archive" class="delete" type="button" aria-label="Close"></button></header>
+  <div class="ticket-dialog-body">
+    <p class="ticket-help">Archived tickets are hidden from the dashboard. Restore a ticket to make it visible again. Permanent deletion removes its report, history and images; existing backups may still contain them.</p>
+    <p id="archive-status" role="status"></p><div id="archive-list"></div>
+    <div class="buttons"><button class="button is-light" id="archive-previous" type="button">Previous</button><button class="button is-light" id="archive-next" type="button">Next</button></div>
+  </div>
+  <footer><button class="button" id="close-archive-footer" type="button">Close</button></footer>
+</dialog>
+<script src="{% static 'js/ticket_archive.js' %}" defer></script>

@@ -44,3 +44,10 @@ class TicketStaffAssignment(models.Model):
 class TicketResearcherLink(models.Model):
     ticket_id = models.PositiveBigIntegerField(unique=True)
     researcher = models.ForeignKey(User, on_delete=models.PROTECT, related_name='linked_tickets')
+
+
+class TicketArchive(models.Model):
+    ticket_id = models.PositiveBigIntegerField(primary_key=True)
+    reason = models.CharField(max_length=1000)
+    archived_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name='archived_tickets')
+    archived_at = models.DateTimeField(auto_now_add=True)

@@ -17,6 +17,14 @@
   async function read(url) {const response = await fetch(url, {credentials: 'same-origin'}); if (!response.ok) throw new Error('Ticket data is currently unavailable.'); return response.json();}
   async function details(id) {return read(`/api/tickets/${encodeURIComponent(id)}`);}
   function updateButton(id, text = 'Update') {const button = node('button', text, 'button is-small is-light'); button.type = 'button'; button.addEventListener('click', () => openUpdate(id)); return button;}
+  function archiveButton(id) {const button = node('button', 'Archive', 'button is-small is-light'); button.type = 'button'; button.addEventListener('click', async () => {
+    const reason = window.prompt(`Why should ticket #${id} be archived?`); if (reason === null) return;
+    if (!reason.trim() || reason.trim().length > 1000) {status.textContent = 'Enter a reason of up to 1,000 characters.'; return;}
+    if (!window.confirm(`Archive ticket #${id}? An administrator can restore it later.`)) return;
+    button.disabled = true;
+    try {await ticketResponse(await fetch(`/api/tickets/${encodeURIComponent(id)}/archive/archive-action`, {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json', 'X-CSRFToken': $('update-form').elements.csrfmiddlewaretoken.value}, body: JSON.stringify({reason})})); load(); loadSummary();}
+    catch (error) {status.textContent = error.message; button.disabled = false;}
+  }); return button;}
   function field(container, title, value) {const el = node('div', null, 'ticket-detail-field'); el.append(node('h4', title), node('p', value || '—')); container.append(el);}
   function renderDetails(data, link) {
     const panel = node('div', null, 'ticket-details'); panel.append(node('h3', `Ticket #${data.ticket_id}`, 'title is-5'));
@@ -49,7 +57,7 @@
       data.images.forEach(image => {const box = node('div', null, 'ticket-image'); box.append(node('strong', image.filename)); const button = node('button', 'Preview image', 'button is-small is-light'); button.type = 'button'; button.addEventListener('click', () => {if (box.querySelector('img')) {box.querySelector('img').remove(); button.textContent = 'Preview image'; return;} const img = document.createElement('img'); img.alt = image.filename; img.loading = 'lazy'; img.src = `/api/tickets/${encodeURIComponent(data.ticket_id)}/images/${encodeURIComponent(image.id)}`; box.append(img); button.textContent = 'Hide image';}); box.append(button); gallery.append(box);});
       panel.append(gallery);
     }
-    panel.append(node('h4', 'History', 'title is-6'), updateButton(data.ticket_id, 'Add update'));
+    panel.append(node('h4', 'History', 'title is-6'), updateButton(data.ticket_id, 'Add update'), archiveButton(data.ticket_id));
     if (!data.events.length) panel.append(node('p', 'No history.'));
     data.events.forEach(event => {const entry = node('div', null, 'ticket-event'); entry.append(node('strong', `${date(event.occurred_at)} · ${event.actor || 'Unknown'}`)); const title = event.old_status && event.new_status && event.old_status !== event.new_status ? `${friendly(event.old_status)} → ${friendly(event.new_status)}` : friendly(event.type); entry.append(node('p', title)); if (event.note) entry.append(node('p', event.note, 'ticket-preserve-text')); panel.append(entry);});
     return panel;
@@ -73,7 +81,7 @@
         detailCell.append(detail); row.append(detailCell);
         const values = [item.ticket_id, date(item.opened_at), item.reporter_name, equipmentName(item.microscope), item.message, `${friendly(item.ticket_type)} / ${friendly(item.priority)}`, friendly(item.issue_type), friendly(item.status), item.assigned_staff?.length ? item.assigned_staff.map(person => person.name).join(', ') : assignedName(item.assigned_to), date(item.resolved_at), item.image_count];
         values.forEach((value, index) => {const cell = document.createElement('td'); if (index === 4) cell.className = 'ticket-message-preview'; if (index === 7) cell.append(node('span', value, `ticket-status ticket-status-${String(item.status || '').toLowerCase().replaceAll('_', '-')}`)); else cell.textContent = value ?? '—'; row.append(cell);});
-        const action = document.createElement('td'); action.append(updateButton(item.ticket_id)); row.append(action); body.append(row);
+        const action = document.createElement('td'); action.append(updateButton(item.ticket_id), archiveButton(item.ticket_id)); row.append(action); body.append(row);
       }
       status.textContent = `${data.count.toLocaleString()} tickets · Page ${data.page}`; $('previous').disabled = page === 1; $('next').disabled = page * data.page_size >= data.count;
     } catch (error) {if (sequence === inventorySequence) status.textContent = error.message;}
@@ -81,6 +89,7 @@
   async function loadSummary() {try {const data = await read('/api/tickets/summary'); for (const key of ['total', 'active', 'resolved']) $(key).textContent = data[key].toLocaleString();} catch { /* Inventory remains usable. */ }}
   const filters = $('ticket-search'); filters.addEventListener('submit', event => {event.preventDefault(); page = 1; load();}); filters.addEventListener('reset', () => {page = 1; setTimeout(load, 0);});
   $('refresh').addEventListener('click', () => {load(); loadSummary();});
+  document.addEventListener('tickets-archive-changed', () => {load(); loadSummary();});
   $('previous').addEventListener('click', () => {if (page > 1) {page--; load();}}); $('next').addEventListener('click', () => {page++; load();});
   const createForm = $('create-form'), createDialog = $('create-dialog');
   $('add-ticket').addEventListener('click', () => {submissionId ||= crypto.randomUUID(); createDialog.showModal();});

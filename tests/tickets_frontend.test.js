@@ -17,7 +17,7 @@ test('ticket list groups equipment, formats codes and loads images only on reque
   const item = {ticket_id: '7', reporter_name: 'A', microscope: 'scope', message: 'Problem', ticket_type: 'INTERNAL_ISSUE', priority: 'NORMAL', status: 'OPEN', image_count: 1};
   const detail = {...item, events: [], images: [{id: '3', filename: 'image.png'}]};
   const requests = [];
-  const context = {document: {getElementById: id => elements[id], createElement: element, addEventListener() {}}, URLSearchParams, Intl, Date, setTimeout, crypto: {randomUUID: () => 'test'},
+  const context = {document: {getElementById: id => elements[id], createElement: element, addEventListener() {}}, window: {prompt: () => '   ', confirm: () => true}, URLSearchParams, Intl, Date, setTimeout, crypto: {randomUUID: () => 'test'},
     fetch: async url => {requests.push(url); return {ok: true, json: async () => url.endsWith('/equipment') ? {equipment: [{id: 'scope', name: 'Microscope A', category: 'Microscope', active: true}]} : url.endsWith('/staff') ? {staff: []} : url.endsWith('/researchers') ? {researchers: []} : url.endsWith('/researcher') ? {researcher_id: null} : url.endsWith('/summary') ? {total: 1, active: 1, resolved: 0} : url === '/api/tickets/7' ? detail : {count: 1, page: 1, page_size: 50, results: [item]}};}};
   vm.runInNewContext(fs.readFileSync('static/js/tickets.js', 'utf8'), context);
   await new Promise(resolve => setImmediate(resolve));
@@ -26,6 +26,9 @@ test('ticket list groups equipment, formats codes and loads images only on reque
   const row = elements['ticket-rows'].children[0];
   assert.equal(row.children[4].textContent, 'Microscope A');
   assert.equal(row.children[6].textContent, 'Internal issue / Normal');
+  await row.children[12].children[1].listeners.click();
+  assert.match(elements['ticket-status'].textContent, /Enter a reason/);
+  assert.equal(requests.some(url => url.includes('archive-action')), false);
   await row.children[0].children[0].listeners.click();
   const panel = row.expanded.children[0].children[0];
   const gallery = panel.children.find(child => child.className === 'ticket-gallery');
