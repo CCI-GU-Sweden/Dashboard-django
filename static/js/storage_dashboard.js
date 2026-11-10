@@ -1,7 +1,7 @@
 (() => {
   const $ = id => document.getElementById(id);
   const plotConfig = {responsive: true, displaylogo: false};
-  const layout = {paper_bgcolor: 'transparent', plot_bgcolor: 'transparent', font: {color: '#475569'}, margin: {l: 65, r: 25, t: 25, b: 60}, legend: {orientation: 'h'}};
+  const layout = () => ({paper_bgcolor: 'transparent', plot_bgcolor: 'transparent', font: {color: '#475569'}, margin: {l: 65, r: 25, t: 25, b: 60}, legend: {orientation: 'h'}, ...(globalThis.dashboardTheme?.plotlyLayout() || {})});
   async function get(url) {
     const response = await fetch(url, {credentials: 'same-origin'});
     if (!response.ok) throw new Error('Data is unavailable or the selected filters are invalid.');
@@ -16,7 +16,8 @@
       const data = await get(`/api/omero/history?${query}`);
       const dates = data.history.map(row => row.date);
       const series = (key, name, color) => ({type: 'scatter', mode: 'lines', name, x: dates, y: data.history.map(row => row[key]), line: {color, width: 2}, fill: 'tozeroy', fillcolor: color === '#3273dc' ? 'rgba(50,115,220,.12)' : 'rgba(35,209,160,.12)', hovertemplate: '%{x}<br>%{y:.2f}<extra>%{fullData.name}</extra>'});
-      await Plotly.react('omeroChart', [series('total', 'Total', '#3273dc'), series('billable', 'Billable', '#23d1a0')], {...layout, margin: {l: 85, r: 25, t: 25, b: 80}, xaxis: {title: {text: 'Date'}, automargin: true}, yaxis: {title: {text: data.metric === 'ore' ? 'Daily charge (öre)' : 'Storage (GB)'}, rangemode: 'tozero', automargin: true}}, plotConfig);
+      const theme = layout();
+      await Plotly.react('omeroChart', [series('total', 'Total', '#3273dc'), series('billable', 'Billable', '#23d1a0')], {...theme, margin: {l: 85, r: 25, t: 25, b: 80}, xaxis: {...theme.xaxis, title: {text: 'Date'}, automargin: true}, yaxis: {...theme.yaxis, title: {text: data.metric === 'ore' ? 'Daily charge (öre)' : 'Storage (GB)'}, rangemode: 'tozero', automargin: true}}, plotConfig);
       $('history-status').textContent = data.history.length ? '' : 'No storage snapshots for this period.';
     } catch (error) {$('history-status').textContent = error.message;}
   }
@@ -28,7 +29,8 @@
   async function ranking() {
     const selected = groups.slice(0, Number($('ranking-limit').value)).reverse();
     const trace = (key, name, color) => ({type: 'bar', orientation: 'h', name, x: selected.map(g => g[key]), y: selected.map(g => g.name || g.id), customdata: selected.map(g => g.id), marker: {color}, hovertemplate: '%{y}<br>%{x:.2f} GB<extra>%{fullData.name}</extra>'});
-    await Plotly.react('groupRankingChart', [trace('billable', 'Billable', '#3273dc'), trace('free', 'Free', '#23d1a0')], {...layout, height: Math.max(350, selected.length * 28 + 100), barmode: 'stack', margin: {l: 180, r: 25, t: 20, b: 60}, xaxis: {title: 'Storage (GB)'}}, plotConfig);
+    const theme = layout();
+    await Plotly.react('groupRankingChart', [trace('billable', 'Billable', '#3273dc'), trace('free', 'Free', '#23d1a0')], {...theme, height: Math.max(350, selected.length * 28 + 100), barmode: 'stack', margin: {l: 180, r: 25, t: 20, b: 60}, xaxis: {...theme.xaxis, title: 'Storage (GB)'}}, plotConfig);
     const chart = $('groupRankingChart');
     chart.removeAllListeners('plotly_click');
     chart.on('plotly_click', event => {
@@ -127,7 +129,8 @@
       $('billing-rows').replaceChildren(); billing.forEach(g => appendRow($('billing-rows'), [g.group_name, g.snapshot_days, g.billable_gb_days.toFixed(2), g.total_sek.toFixed(2)]));
       $('billing-status').textContent = `${billing.length} groups · inclusive dates`;
       const reversed = [...billing].reverse();
-      await Plotly.react('billingChart', [{type: 'bar', orientation: 'h', x: reversed.map(g => g.total_sek), y: reversed.map(g => g.group_name), marker: {color: '#3273dc'}}], {...layout, height: Math.max(350, reversed.length * 28 + 100), margin: {l: 180, r: 25, t: 20, b: 60}, xaxis: {title: 'Total SEK'}}, plotConfig);
+      const theme = layout();
+      await Plotly.react('billingChart', [{type: 'bar', orientation: 'h', x: reversed.map(g => g.total_sek), y: reversed.map(g => g.group_name), marker: {color: '#3273dc'}}], {...theme, height: Math.max(350, reversed.length * 28 + 100), margin: {l: 180, r: 25, t: 20, b: 60}, xaxis: {...theme.xaxis, title: 'Total SEK'}}, plotConfig);
     } catch (error) {$('billing-status').textContent = error.message;}
   });
   $('billing-export')?.addEventListener('click', () => {

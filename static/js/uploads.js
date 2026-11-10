@@ -57,6 +57,7 @@
       if (!chart) return;
       if (typeof Plotly === 'undefined') throw new Error('The chart library could not be loaded.');
       const sizeMetric = metric.value === 'total_file_size_mb';
+      const theme = globalThis.dashboardTheme?.plotlyLayout() || {};
       const traces = data.chart_data.datasets.map(dataset => ({
         type: 'bar', name: dataset.label, x: data.chart_data.labels, y: dataset.data,
         marker: {color: dataset.backgroundColor},
@@ -65,9 +66,9 @@
       await Plotly.react(chart, traces, {
         barmode: 'stack', hovermode: 'x unified', showlegend: false,
         margin: {l: 65, r: 20, t: 15, b: 60},
-        xaxis: {title: {text: 'Date'}, type: 'date'},
-        yaxis: {title: {text: sizeMetric ? 'Data (GB)' : 'Files'}, rangemode: 'tozero'},
-        paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
+        ...theme,
+        xaxis: {...theme.xaxis, title: {text: 'Date'}, type: 'date'},
+        yaxis: {...theme.yaxis, title: {text: sizeMetric ? 'Data (GB)' : 'Files'}, rangemode: 'tozero'},
       }, {responsive: true, displaylogo: false, toImageButtonOptions: {format: 'png', filename: 'uploads-chart'}});
       chartReady = true;
       status.textContent = traces.length ? '' : 'No uploads in this period.';

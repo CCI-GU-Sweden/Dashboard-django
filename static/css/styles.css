@@ -1071,6 +1071,77 @@ tr.details-open .fileset-detail-button i {
 }
 @media (max-width: 500px) { .ticket-filter-grid, .ticket-form-grid, .ticket-detail-grid { grid-template-columns: 1fr; } }
 
+/* Dark palette applies to every dashboard page and native form control. */
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --ink: #e5edf7;
+  --muted: #a9bad0;
+  --line: #3b4b62;
+  --surface: #1c2a3c;
+  --canvas: #101a29;
+  --blue: #8cb4ff;
+  --blue-soft: #253c61;
+  --teal: #6de0c9;
+  --teal-soft: #17483f;
+  --violet: #c4b5fd;
+  --violet-soft: #3b315c;
+  --shadow: 0 14px 38px rgba(0, 0, 0, .25);
+}
+html[data-theme="dark"] .dashboard-header { background: #172437; }
+html[data-theme="dark"] .brand-button img { background: #fff; border-radius: 5px; padding: 3px; }
+html[data-theme="dark"] .title, html[data-theme="dark"] .subtitle,
+html[data-theme="dark"] .label, html[data-theme="dark"] strong,
+html[data-theme="dark"] .content, html[data-theme="dark"] .content strong,
+html[data-theme="dark"] .table, html[data-theme="dark"] .table th,
+html[data-theme="dark"] .table td { color: var(--ink); }
+html[data-theme="dark"] a { color: var(--blue); }
+html[data-theme="dark"] a:hover { color: #c2d8ff; }
+html[data-theme="dark"] .brand-button, html[data-theme="dark"] .brand-button:hover { color: var(--ink); }
+html[data-theme="dark"] .box, html[data-theme="dark"] .modal-card-body,
+html[data-theme="dark"] .modal-card-head, html[data-theme="dark"] .modal-card-foot,
+html[data-theme="dark"] .ticket-dialog, html[data-theme="dark"] .ticket-image,
+html[data-theme="dark"] .ticket-researcher-link, html[data-theme="dark"] .email-dialog { background: var(--surface); color: var(--ink); border-color: var(--line); }
+html[data-theme="dark"] .ticket-dialog header, html[data-theme="dark"] .ticket-dialog footer,
+html[data-theme="dark"] .ticket-details, html[data-theme="dark"] .policy-history,
+html[data-theme="dark"] .fileset-details, html[data-theme="dark"] .fileset-details-loading,
+html[data-theme="dark"] .fileset-details-error { background: #223247; color: var(--ink); border-color: var(--line); }
+html[data-theme="dark"] .input, html[data-theme="dark"] .textarea,
+html[data-theme="dark"] .select select, html[data-theme="dark"] input:not([type="checkbox"]):not([type="radio"]),
+html[data-theme="dark"] select, html[data-theme="dark"] textarea {
+  background: #142235; border-color: #52647b; color: var(--ink);
+}
+html[data-theme="dark"] input::placeholder, html[data-theme="dark"] textarea::placeholder { color: #a4b4c9; opacity: 1; }
+html[data-theme="dark"] .input:focus, html[data-theme="dark"] .textarea:focus, html[data-theme="dark"] select:focus { border-color: var(--blue); }
+html[data-theme="dark"] .button.is-light, html[data-theme="dark"] .button:not(.is-link):not(.is-danger) { background: #2b3d55; border-color: #536780; color: #eaf2ff; }
+html[data-theme="dark"] .button.is-light:hover, html[data-theme="dark"] .button:not(.is-link):not(.is-danger):hover { background: #3a506c; color: #fff; }
+html[data-theme="dark"] .button:disabled { opacity: .55; }
+html[data-theme="dark"] table, html[data-theme="dark"] .table { background: transparent; color: var(--ink); }
+html[data-theme="dark"] td, html[data-theme="dark"] th, html[data-theme="dark"] .equipment-row { border-color: var(--line); }
+html[data-theme="dark"] .table.is-striped tbody tr:not(.is-selected):nth-child(even),
+html[data-theme="dark"] #ticketTable tbody tr:nth-child(4n + 1),
+html[data-theme="dark"] #filesetTable tbody tr:nth-child(4n + 1) { background-color: #223247; }
+html[data-theme="dark"] .tabs ul { border-color: var(--line); }
+html[data-theme="dark"] .tabs a, html[data-theme="dark"] .omero-data-tabs button { color: var(--muted); }
+html[data-theme="dark"] .tabs li.is-active a, html[data-theme="dark"] .omero-data-tabs li.is-active button { color: var(--blue); border-color: var(--blue); }
+html[data-theme="dark"] .ticket-status { background: #263e64; color: #c2d8ff; }
+html[data-theme="dark"] .status-badge, html[data-theme="dark"] .fileset-status.is-active,
+html[data-theme="dark"] .health-status.is-success, html[data-theme="dark"] .ticket-status-resolved { background: #17483f; color: #a6f2c6; }
+html[data-theme="dark"] .status-badge.muted, html[data-theme="dark"] .ticket-status-cancelled { background: #344258; color: #d4deec; }
+html[data-theme="dark"] .health-status.is-running, html[data-theme="dark"] .policy-badge.is-agreement { background: #263e64; color: #c2d8ff; }
+html[data-theme="dark"] .health-status.is-partial, html[data-theme="dark"] .policy-badge.is-temporary,
+html[data-theme="dark"] .ticket-status-waiting, html[data-theme="dark"] .tickets-icon { background: #553918; color: #ffd69b; }
+html[data-theme="dark"] .health-status.is-failed, html[data-theme="dark"] .fileset-status.is-deleted { background: #5b2833; color: #ffc2c5; }
+html[data-theme="dark"] .policy-badge.is-core { background: #344258; color: #d4deec; }
+html[data-theme="dark"] .change-positive { color: #8ee5ae !important; }
+html[data-theme="dark"] .change-negative { color: #ffaaa5 !important; }
+html[data-theme="dark"] .small-note { color: var(--muted); }
+html[data-theme="dark"] .notification.is-success.is-light { background: #17483f; color: #c8f8dc; }
+.theme-toggle { white-space: nowrap; }
+@media (max-width: 600px) {
+  .dashboard-header { height: auto; min-height: 76px; flex-wrap: wrap; gap: .5rem; padding: .6rem 1rem; }
+  .dashboard-actions { flex-wrap: wrap; }
+}
+
 @media (max-width: 900px) {
   .summary-grid {
     grid-template-columns: 1fr;
