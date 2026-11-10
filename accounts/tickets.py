@@ -504,6 +504,11 @@ def read_ticket(ticket_id, all_events=False):
         for event in cursor.fetchall():
             entry = dict(zip(('type', 'old_status', 'new_status', 'note', 'actor', 'occurred_at'), event[:6]))
             changes = event[6] if len(event) > 6 else None
+            if isinstance(changes, str):
+                try:
+                    changes = json.loads(changes)
+                except ValueError:
+                    changes = None
             entry['admin_edit'] = changes.get('admin_edit', {}) if isinstance(changes, dict) else {}
             result['events'].append(entry)
         cursor.execute('SELECT image_id, filename FROM public.microscope_ticket_image WHERE ticket_id = %s ORDER BY image_id LIMIT 5', [ticket_id])

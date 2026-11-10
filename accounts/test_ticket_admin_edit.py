@@ -5,7 +5,7 @@ from zipfile import ZipFile
 
 from django.test import TestCase
 from .models import TicketArchive, User
-from .tickets import TicketCreateForm, TicketConflict, TicketAdminEditForm
+from .tickets import TicketCreateForm, TicketConflict, TicketAdminEditForm, read_ticket
 
 
 class AdminTicketTests(TestCase):
@@ -33,6 +33,13 @@ class AdminTicketTests(TestCase):
         data = dict(self.payload, ticket_type='INCIDENT', priority='NORMAL', source_event_id='8ff8b72d-3646-4e0d-a16d-296b53d9a275')
         self.assertFalse(TicketCreateForm(data).is_valid())
         self.assertTrue(TicketAdminEditForm(data).is_valid())
+
+    def test_history_reads_json_returned_as_text_by_postgres(self):
+        with patch('accounts.tickets.connection') as db:
+            cursor = db.cursor.return_value.__enter__.return_value
+            cursor.fetchone.return_value = (7, 'Name', 'r@example.org', '', 'New', 'USER_REQUEST', None, 'NORMAL', 'OPEN', None, None, None, None, 2, None)
+            cursor.fetchall.side_effect = [[('UPDATED', 'OPEN', 'OPEN', 'Edited', 'Staff', None, json.dumps({'admin_edit': {'message': {'before': 'Old', 'after': 'New'}}}))], []]
+            self.assertEqual(read_ticket(7)['events'][0]['admin_edit']['message']['before'], 'Old')
 
     def test_export_is_staff_only_and_contains_report_history_and_images(self):
         self.client.force_login(self.researcher)
