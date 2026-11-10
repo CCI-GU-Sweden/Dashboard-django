@@ -4,7 +4,7 @@ from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseForbid
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
 
-from .models import AuditEvent, TicketArchive, TicketResearcherLink, TicketStaffAssignment, User, VerifiedOmeroGroup
+from .models import AuditEvent, TicketArchive, TicketResearcherLink, TicketStaffAssignment, TicketTag, TicketTagAssignment, User, VerifiedOmeroGroup
 
 
 def live(request):
@@ -310,7 +310,7 @@ def ticket_form_error(form):
               'microscope': 'Equipment', 'message': 'Message', 'ticket_type': 'Ticket type',
               'issue_type': 'Issue type', 'priority': 'Priority', 'source_event_id': 'Submission',
               'version': 'Ticket version', 'status': 'Status', 'assigned_to': 'Assigned staff',
-              'change_note': 'Progress update', 'resolution_note': 'Closing note'}
+              'change_note': 'Progress update', 'resolution_note': 'Closing note', 'tags': 'Tags'}
     fields = form.errors.get_json_data()
     messages = [f"{labels.get(key, 'Ticket')}: {entry['message']}" for key, errors in fields.items() for entry in errors]
     return JsonResponse({'error': ' '.join(messages) or 'Check the ticket fields.', 'fields': fields}, status=400)
@@ -347,7 +347,7 @@ def ticket_inventory(request):
             return JsonResponse(result, status=201 if created else 200)
         result = list_tickets(request.GET, researcher_id=request.user.pk if researcher else None)
         if researcher:
-            fields = ('ticket_id', 'microscope', 'message', 'status', 'opened_at', 'updated_at', 'resolved_at', 'ticket_type')
+            fields = ('ticket_id', 'microscope', 'message', 'status', 'opened_at', 'updated_at', 'resolved_at', 'ticket_type', 'tags')
             result['results'] = [{key: item[key] for key in fields} for item in result['results']]
         return JsonResponse(result)
     except InvalidTicketFilters as exc:
@@ -358,6 +358,87 @@ def ticket_inventory(request):
         return JsonResponse({'error': str(exc)}, status=409)
     except DatabaseError:
         return JsonResponse({'error': 'Tickets are currently unavailable.'}, status=503)
+
+
+@require_http_methods(['GET', 'POST', 'DELETE'])
+def ticket_tags(request, tag_id=None):
+    import json
+    if not operational_access(request.user) and not researcher_access(request.user):
+        return JsonResponse({'error': 'Access required.'}, status=403)
+    if request.method == 'GET' and tag_id is None:
+        return JsonResponse({'tags': [{'id': str(tag.pk), 'name': tag.name} for tag in TicketTag.objects.all()]})
+    if request.method == 'POST' and tag_id is None and operational_access(request.user):
+        try:
+            payload = json.loads(request.body)
+            name = payload.get('name') if isinstance(payload, dict) and set(payload) == {'name'} else None
+            if not isinstance(name, str):
+                raise ValueError
+            name = ' '.join(name.split())
+            if not name or len(name) > 60 or any(ord(c) < 32 or ord(c) == 127 for c in name):
+                raise ValueError
+        except (ValueError, UnicodeDecodeError):
+            return JsonResponse({'error': 'Enter a tag name of up to 60 characters.'}, status=400)
+        try:
+            with transaction.atomic():
+                tag = TicketTag.objects.create(name=name)
+                AuditEvent.objects.create(actor=request.user, target=request.user, action='ticket_tag_created', after={'tag_id': str(tag.pk), 'name': name})
+            return JsonResponse({'id': str(tag.pk), 'name': name}, status=201)
+        except IntegrityError:
+            return JsonResponse({'error': 'A tag with this name already exists.'}, status=409)
+        except DatabaseError:
+            return JsonResponse({'error': 'Tags are currently unavailable.'}, status=503)
+    if request.method == 'DELETE' and tag_id is not None:
+        if not is_dashboard_admin(request.user):
+            return JsonResponse({'error': 'Administrator access required.'}, status=403)
+        try:
+            with transaction.atomic():
+                tag = TicketTag.objects.select_for_update().filter(pk=tag_id).first()
+                if not tag:
+                    return JsonResponse({'error': 'Tag not found.'}, status=404)
+                name, count = tag.name, tag.assignments.count()
+                tag.delete()
+                AuditEvent.objects.create(actor=request.user, target=request.user, action='ticket_tag_deleted', before={'tag_id': str(tag_id), 'name': name, 'tickets': count})
+            return JsonResponse({'ok': True})
+        except DatabaseError:
+            return JsonResponse({'error': 'Tags are currently unavailable.'}, status=503)
+    return JsonResponse({'error': 'Staff access required.'}, status=403)
+
+
+@require_http_methods(['GET', 'PATCH'])
+def ticket_tag_assignments(request, ticket_id):
+    import json
+    from .tickets import InvalidTicketFilters, parse_ticket_tags
+    if not operational_access(request.user):
+        return JsonResponse({'error': 'Staff access required.'}, status=403)
+    if not 1 <= ticket_id <= 9223372036854775807:
+        return JsonResponse({'error': 'Ticket not found.'}, status=404)
+    try:
+        if request.method == 'GET':
+            if TicketArchive.objects.filter(ticket_id=ticket_id).exists():
+                return JsonResponse({'error': 'Ticket not found.'}, status=404)
+            return JsonResponse({'tags': [{'id': str(a.tag_id), 'name': a.tag.name} for a in TicketTagAssignment.objects.filter(ticket_id=ticket_id).select_related('tag').order_by('tag__name')]})
+        payload = json.loads(request.body)
+        if not isinstance(payload, dict) or set(payload) != {'tags', 'expected'}:
+            raise ValueError
+        ids = parse_ticket_tags(json.dumps(payload['tags']))
+        expected = parse_ticket_tags(json.dumps(payload['expected']))
+        with transaction.atomic():
+            if not lock_ticket_for_archive(ticket_id) or TicketArchive.objects.filter(ticket_id=ticket_id).exists():
+                return JsonResponse({'error': 'Ticket not found.'}, status=404)
+            current = sorted(TicketTagAssignment.objects.filter(ticket_id=ticket_id).values_list('tag_id', flat=True))
+            if current != expected:
+                return JsonResponse({'error': 'Tags changed. Reload the ticket and try again.'}, status=409)
+            if len(list(TicketTag.objects.select_for_update().filter(pk__in=ids))) != len(ids):
+                return JsonResponse({'error': 'A selected tag no longer exists.'}, status=409)
+            if current != ids:
+                TicketTagAssignment.objects.filter(ticket_id=ticket_id).delete()
+                TicketTagAssignment.objects.bulk_create([TicketTagAssignment(ticket_id=ticket_id, tag_id=tag_id) for tag_id in ids])
+                AuditEvent.objects.create(actor=request.user, target=request.user, action='ticket_tags_changed', before={'ticket_id': str(ticket_id), 'tags': current}, after={'tags': ids})
+        return JsonResponse({'tags': [str(tag_id) for tag_id in ids]})
+    except (ValueError, UnicodeDecodeError, InvalidTicketFilters):
+        return JsonResponse({'error': 'Select up to 20 valid tags.'}, status=400)
+    except DatabaseError:
+        return JsonResponse({'error': 'Ticket tags are currently unavailable.'}, status=503)
 
 
 @require_GET
@@ -643,6 +724,7 @@ def ticket_archive_action(request, ticket_id, action):
                     purge_archived_ticket(ticket_id)
                     TicketResearcherLink.objects.filter(ticket_id=ticket_id).delete()
                     TicketStaffAssignment.objects.filter(ticket_id=ticket_id).delete()
+                    TicketTagAssignment.objects.filter(ticket_id=ticket_id).delete()
                 archived.delete()
             AuditEvent.objects.create(actor=request.user, target=request.user, action='ticket_' + {'archive': 'archived', 'restore': 'restored', 'delete': 'deleted'}[action], before={'ticket_id': str(ticket_id)}, after={'reason': reason})
         return JsonResponse({'ok': True})

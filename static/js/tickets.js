@@ -1,11 +1,11 @@
 (() => {
   const $ = id => document.getElementById(id);
   const body = $('ticket-rows'), status = $('ticket-status');
-  const labels = {USER_REQUEST: 'User request', USER_REPORT: 'User report', INTERNAL_ISSUE: 'Internal issue', INCIDENT: 'Incident', LOW: 'Low', NORMAL: 'Normal', HIGH: 'High', CRITICAL: 'Critical', SOFTWARE: 'Software', HARDWARE: 'Hardware', CONNECTION: 'Connection', ACCESS_PERMISSIONS: 'Access / permissions', ACQUISITION_IMAGE_QUALITY: 'Acquisition / image quality', OTHER: 'Other', OPEN: 'Open', IN_PROGRESS: 'In progress', WAITING: 'Waiting', RESOLVED: 'Resolved', CANCELLED: 'Cancelled', CONTACT_FORM: 'Contact form', DASHBOARD: 'Dashboard', CREATED: 'Ticket created', UPDATED: 'Ticket updated', STATUS_CHANGED: 'Status changed'};
+  const labels = {USER_REQUEST: 'User issue', USER_REPORT: 'User issue', INTERNAL_ISSUE: 'Technical issue', INCIDENT: 'Incident', LOW: 'Low', NORMAL: 'Normal', HIGH: 'High', CRITICAL: 'Critical', SOFTWARE: 'Software', HARDWARE: 'Hardware', CONNECTION: 'Connection', ACCESS_PERMISSIONS: 'Access / permissions', ACQUISITION_IMAGE_QUALITY: 'Acquisition / image quality', OTHER: 'Other', OPEN: 'Open', IN_PROGRESS: 'In progress', WAITING: 'Waiting', RESOLVED: 'Resolved', CANCELLED: 'Cancelled', CONTACT_FORM: 'Contact form', DASHBOARD: 'Dashboard', CREATED: 'Ticket created', UPDATED: 'Ticket updated', STATUS_CHANGED: 'Status changed'};
   const friendly = value => labels[value] || (value ? String(value).replaceAll('_', ' ').toLowerCase().replace(/^./, c => c.toUpperCase()) : '—');
   const node = (tag, text, className) => {const el = document.createElement(tag); if (text != null) el.textContent = text; if (className) el.className = className; return el;};
   const date = value => value ? new Intl.DateTimeFormat(undefined, {timeZone: 'Europe/Stockholm', dateStyle: 'medium', timeStyle: 'short'}).format(new Date(value)) : '—';
-  let page = 1, submissionId = null, equipment = new Map(), staff = new Map(), researchers = [], updateTicket = null, inventorySequence = 0;
+  let page = 1, submissionId = null, equipment = new Map(), staff = new Map(), researchers = [], availableTags = [], updateTicket = null, inventorySequence = 0;
   function equipmentName(value) {return equipment.get(value) || value || 'Facility-wide';}
   function omitUnselectedImages(payload) {const files = payload.getAll('images'); if (files.length && files.every(file => typeof file !== 'string' && !file.name)) payload.delete('images');}
   function assignedName(value) {if (!value) return 'Unassigned'; return value.startsWith('dashboard-user:') ? staff.get(value.slice(15)) || 'Former staff member' : value;}
@@ -26,11 +26,17 @@
     catch (error) {status.textContent = error.message; button.disabled = false;}
   }); return button;}
   function field(container, title, value) {const el = node('div', null, 'ticket-detail-field'); el.append(node('h4', title), node('p', value || '—')); container.append(el);}
-  function renderDetails(data, link) {
+  function renderDetails(data, link, ticketTags = []) {
     const panel = node('div', null, 'ticket-details'); panel.append(node('h3', `Ticket #${data.ticket_id}`, 'title is-5'));
     const grid = node('div', null, 'ticket-detail-grid');
     for (const [name, value] of [['Original report', data.message], ['Reported by', data.reporter_name], ['Ticket type', friendly(data.ticket_type)], ['Equipment / assigned staff', `${equipmentName(data.microscope)} / ${data.assigned_staff?.length ? data.assigned_staff.map(person => person.name).join(', ') : data.assigned_to_name || assignedName(data.assigned_to)}`], ['Opened / updated (Europe/Stockholm)', `${date(data.opened_at)} / ${date(data.updated_at)}`], ['Closing date', date(data.resolved_at)], ['Resolution / closing note', data.resolution_note || 'No closing note provided']]) field(grid, name, value);
     panel.append(grid);
+    const tagBox = node('div', null, 'ticket-researcher-link'), tagSelect = node('select', null, 'input'); tagSelect.multiple = true; tagSelect.size = 4; tagSelect.setAttribute('aria-label', 'Ticket tags');
+    let expectedTags = ticketTags.map(tag => String(tag.id));
+    availableTags.forEach(tag => {const option = node('option', tag.name); option.value = String(tag.id); option.selected = expectedTags.includes(option.value); tagSelect.append(option);});
+    const saveTags = node('button', 'Save tags', 'button is-small is-light'), tagStatus = node('p', '', 'ticket-help'); saveTags.type = 'button'; tagStatus.setAttribute('role', 'status');
+    saveTags.addEventListener('click', async () => {saveTags.disabled = true; try {const response = await fetch(`/api/tickets/${encodeURIComponent(data.ticket_id)}/tags`, {method: 'PATCH', credentials: 'same-origin', headers: {'Content-Type': 'application/json', 'X-CSRFToken': $('update-form').elements.csrfmiddlewaretoken.value}, body: JSON.stringify({tags: [...tagSelect.selectedOptions].map(option => option.value), expected: expectedTags})}); const result = await ticketResponse(response); expectedTags = result.tags; tagStatus.textContent = 'Tags saved.';} catch (error) {tagStatus.textContent = error.message;} finally {saveTags.disabled = false;}});
+    tagBox.append(node('h4', 'Tags', 'title is-6'), tagSelect, node('p', 'Use Ctrl/Cmd to select multiple tags.', 'ticket-help'), saveTags, tagStatus); panel.append(tagBox);
     const linkBox = node('div', null, 'ticket-researcher-link'); linkBox.append(node('h4', 'Linked researcher', 'title is-6'));
     linkBox.append(node('p', 'Linking allows this researcher to view the ticket report and status.'));
     const search = document.createElement('input'); search.type = 'search'; search.className = 'input'; search.placeholder = 'Search by name or ORCID'; search.setAttribute('aria-label', 'Search researchers');
@@ -65,7 +71,7 @@
   async function load() {
     const sequence = ++inventorySequence;
     const query = new URLSearchParams({page: String(page)});
-    for (const id of ['search', 'reporter', 'message', 'microscope', 'startDate', 'endDate', 'dateField', 'issueType', 'type', 'priority', 'source', 'sort', 'order']) {const value = $(id).value; if (value) query.set(id, value);}
+    for (const id of ['search', 'reporter', 'message', 'microscope', 'startDate', 'endDate', 'dateField', 'issueType', 'type', 'priority', 'source', 'sort', 'order', 'tag']) {const value = $(id)?.value; if (value) query.set(id, value);}
     const selected = $('status').value; if (selected !== 'active') query.set('status', selected);
     status.textContent = 'Loading…';
     try {
@@ -75,12 +81,12 @@
         detail.addEventListener('click', async () => {
           if (detail.getAttribute('aria-expanded') === 'true') {row.nextElementSibling.remove(); detail.setAttribute('aria-expanded', 'false'); return;}
           detail.disabled = true;
-          try {const [data, link] = await Promise.all([details(item.ticket_id), read(`/api/tickets/${encodeURIComponent(item.ticket_id)}/researcher`)]); const expanded = document.createElement('tr'), cell = document.createElement('td'); cell.colSpan = 13; cell.append(renderDetails(data, link)); expanded.append(cell); row.after(expanded); detail.setAttribute('aria-expanded', 'true');}
+          try {const [data, link, tags] = await Promise.all([details(item.ticket_id), read(`/api/tickets/${encodeURIComponent(item.ticket_id)}/researcher`), read(`/api/tickets/${encodeURIComponent(item.ticket_id)}/tags`)]); const expanded = document.createElement('tr'), cell = document.createElement('td'); cell.colSpan = 13; cell.append(renderDetails(data, link, tags.tags)); expanded.append(cell); row.after(expanded); detail.setAttribute('aria-expanded', 'true');}
           catch (error) {status.textContent = error.message;} finally {detail.disabled = false;}
         });
         detailCell.append(detail); row.append(detailCell);
         const values = [item.ticket_id, date(item.opened_at), item.reporter_name, equipmentName(item.microscope), item.message, `${friendly(item.ticket_type)} / ${friendly(item.priority)}`, friendly(item.issue_type), friendly(item.status), item.assigned_staff?.length ? item.assigned_staff.map(person => person.name).join(', ') : assignedName(item.assigned_to), date(item.resolved_at), item.image_count];
-        values.forEach((value, index) => {const cell = document.createElement('td'); if (index === 4) cell.className = 'ticket-message-preview'; if (index === 7) cell.append(node('span', value, `ticket-status ticket-status-${String(item.status || '').toLowerCase().replaceAll('_', '-')}`)); else cell.textContent = value ?? '—'; row.append(cell);});
+        values.forEach((value, index) => {const cell = document.createElement('td'); if (index === 4) cell.className = 'ticket-message-preview'; if (index === 7) cell.append(node('span', value, `ticket-status ticket-status-${String(item.status || '').toLowerCase().replaceAll('_', '-')}`)); else cell.textContent = value ?? '—'; if (index === 4 && item.tags?.length) cell.append(node('div', item.tags.map(tag => tag.name).join(' · '), 'ticket-help')); row.append(cell);});
         const action = document.createElement('td'); action.append(updateButton(item.ticket_id), archiveButton(item.ticket_id)); row.append(action); body.append(row);
       }
       status.textContent = `${data.count.toLocaleString()} tickets · Page ${data.page}`; $('previous').disabled = page === 1; $('next').disabled = page * data.page_size >= data.count;
@@ -95,7 +101,7 @@
   $('add-ticket').addEventListener('click', () => {submissionId ||= crypto.randomUUID(); createDialog.showModal();});
   for (const id of ['close-ticket', 'cancel-ticket']) $(id).addEventListener('click', () => createDialog.close());
   createForm.addEventListener('submit', async event => {
-    event.preventDefault(); const button = createForm.querySelector('[type=submit]'), error = $('create-error'), payload = new FormData(createForm); payload.set('source_event_id', submissionId); omitUnselectedImages(payload); button.disabled = true; error.textContent = '';
+    event.preventDefault(); const button = createForm.querySelector('[type=submit]'), error = $('create-error'), payload = new FormData(createForm); payload.set('source_event_id', submissionId); if ($('create-tags')) payload.set('tags', JSON.stringify([...$('create-tags').selectedOptions].map(option => option.value))); omitUnselectedImages(payload); button.disabled = true; error.textContent = '';
     try {const response = await fetch('/api/tickets', {method: 'POST', credentials: 'same-origin', headers: {'X-CSRFToken': createForm.elements.csrfmiddlewaretoken.value}, body: payload}); await ticketResponse(response); createDialog.close(); createForm.reset(); submissionId = null; page = 1; load(); loadSummary();}
     catch (problem) {error.textContent = problem.message;} finally {button.disabled = false;}
   });
@@ -136,6 +142,9 @@
     }
   }
   document.addEventListener('equipment-changed', async () => {try {const data = await read('/api/tickets/equipment'); fillEquipment(data.equipment); load();} catch {status.textContent = 'Could not refresh equipment. Please reload the page.';}});
+  async function refreshTags() {try {availableTags = (await read('/api/tickets/tags')).tags; for (const id of ['create-tags', 'tag']) {const select = $(id); if (!select) continue; const selected = new Set([...select.selectedOptions].map(option => option.value)); select.replaceChildren(); if (id === 'tag') {const all = node('option', 'All tags'); all.value = ''; select.append(all);} availableTags.forEach(tag => {const option = node('option', tag.name); option.value = tag.id; option.selected = selected.has(tag.id); select.append(option);});}} catch {status.textContent = 'Tags are unavailable. Please refresh the page.';}}
+  document.addEventListener('ticket-tags-changed', () => {refreshTags(); load();});
+  refreshTags();
   Promise.all([read('/api/tickets/equipment'), read('/api/tickets/staff'), read('/api/tickets/researchers')]).then(([equipmentData, staffData, researcherData]) => {fillEquipment(equipmentData.equipment); staff = new Map(staffData.staff.map(item => [String(item.id), item.name])); researchers = researcherData.researchers; load();}).catch(() => {status.textContent = 'Equipment or staff list is unavailable. Please refresh.'; $('add-ticket').disabled = true;});
   loadSummary();
 })();

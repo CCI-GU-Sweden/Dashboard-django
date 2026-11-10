@@ -25,6 +25,7 @@
       } catch (problem) {error.textContent = problem.message;} finally {submit.disabled = false;}
     });
     const fields = document.getElementById('detail-fields');
+    data.ticket_type = ({USER_REQUEST: 'User issue', USER_REPORT: 'User issue', INTERNAL_ISSUE: 'Technical issue', INCIDENT: 'Incident'})[data.ticket_type] || data.ticket_type;
     for (const [label, value] of [['Reporter', data.reporter_name], ['Contact', data.reporter_identifier], ['Equipment', data.microscope], ['Message', data.message], ['Type', data.ticket_type], ['Issue', data.issue_type], ['Status', data.status], ['Priority', data.priority], ['Assigned to', data.assigned_to], ['Opened', data.opened_at], ['Resolution', data.resolution_note]]) {
       fields.append(node('dt', label), node('dd', value));
     }

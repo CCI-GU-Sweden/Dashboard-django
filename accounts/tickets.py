@@ -28,6 +28,7 @@ class TicketCreateForm(forms.Form):
     issue_type = forms.ChoiceField(required=False, choices=[('', 'Unspecified')] + [(value, value) for value in ('SOFTWARE', 'HARDWARE', 'CONNECTION', 'ACCESS_PERMISSIONS', 'ACQUISITION_IMAGE_QUALITY', 'OTHER')])
     priority = forms.ChoiceField(choices=[(value, value) for value in ('LOW', 'NORMAL', 'HIGH', 'CRITICAL')])
     source_event_id = forms.UUIDField()
+    tags = forms.CharField(max_length=2000, required=False)
 
 
 class TicketUpdateForm(forms.Form):
@@ -163,17 +164,22 @@ def update_ticket(ticket_id, form, user, images=None):
 
 
 def create_ticket(form, user, images=None):
-    from .models import AuditEvent, TicketResearcherLink, User
+    from .models import AuditEvent, TicketResearcherLink, TicketTag, TicketTagAssignment, User
     images = images or []
     values = form.cleaned_data
     actor = f'dashboard-user:{user.pk}'
     request_id = str(values['source_event_id'])
     fields = {key: (values[key] or None) for key in ('reporter_name', 'reporter_identifier', 'microscope', 'message', 'ticket_type', 'issue_type', 'priority')}
     hash_payload = {'fields': fields, 'actor': actor}
+    tag_ids = parse_ticket_tags(values.get('tags', ''))
+    if tag_ids:
+        hash_payload['tags'] = tag_ids
     if images:
         hash_payload['images'] = [[image['filename'], hashlib.sha256(image['data']).hexdigest()] for image in images]
     request_hash = hashlib.sha256(json.dumps(hash_payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     with transaction.atomic():
+        if tag_ids and len(list(TicketTag.objects.select_for_update().filter(pk__in=tag_ids))) != len(tag_ids):
+            raise InvalidTicketFilters('One or more tags no longer exist. Refresh and try again.')
         if user.role == User.Role.RESEARCHER:
             locked_user = User.objects.select_for_update().get(pk=user.pk)
             if not locked_user.is_active or locked_user.role != User.Role.RESEARCHER or not locked_user.can_create_tickets:
@@ -201,6 +207,7 @@ def create_ticket(form, user, images=None):
                     raise TicketConflict('This submission has already been used with different data.')
                 return {'ticket_id': str(existing[0]), 'version': existing[1]}, False
             metadata = add_images(cursor, inserted[0], images)
+            TicketTagAssignment.objects.bulk_create([TicketTagAssignment(ticket_id=inserted[0], tag_id=tag_id) for tag_id in tag_ids])
             if user.role == User.Role.RESEARCHER:
                 TicketResearcherLink.objects.create(ticket_id=inserted[0], researcher=user)
                 AuditEvent.objects.create(actor=user, target=user, action='ticket_researcher_linked', before={}, after={'ticket_id': str(inserted[0]), 'researcher_id': user.pk})
@@ -209,6 +216,16 @@ def create_ticket(form, user, images=None):
                 VALUES (%s, 'CREATED', NULL, 'OPEN', NULL, %s::jsonb, %s)''',
                 [inserted[0], json.dumps({'request_hash': request_hash, 'initial': fields, 'images_added': metadata}), actor])
     return {'ticket_id': str(inserted[0]), 'version': inserted[1]}, True
+
+
+def parse_ticket_tags(value):
+    try:
+        ids = json.loads(value) if value else []
+        if not isinstance(ids, list) or len(ids) > 20 or any(not isinstance(x, str) or not x.isdecimal() or not 1 <= int(x) <= 9223372036854775807 for x in ids):
+            raise ValueError
+        return sorted(set(map(int, ids)))
+    except (TypeError, ValueError):
+        raise InvalidTicketFilters('Select up to 20 valid tags.') from None
 
 
 def list_equipment(include_inactive=False):
@@ -309,13 +326,22 @@ def list_tickets(params, researcher_id=None):
     elif equipment:
         conditions.append('(microscope = %s OR microscope = (SELECT name FROM public.ticket_equipment WHERE equipment_id = %s))')
         values.extend([equipment, equipment])
-    for key, column, allowed in (('priority', 'priority', ('LOW', 'NORMAL', 'HIGH', 'CRITICAL')), ('type', 'ticket_type', ('USER_REQUEST', 'USER_REPORT', 'INTERNAL_ISSUE', 'INCIDENT')), ('issueType', 'issue_type', ('SOFTWARE', 'HARDWARE', 'CONNECTION', 'ACCESS_PERMISSIONS', 'ACQUISITION_IMAGE_QUALITY', 'OTHER'))):
+    for key, column, allowed in (('priority', 'priority', ('LOW', 'NORMAL', 'HIGH', 'CRITICAL')), ('type', 'ticket_type', ('USER_ISSUE', 'USER_REQUEST', 'USER_REPORT', 'INTERNAL_ISSUE', 'INCIDENT')), ('issueType', 'issue_type', ('SOFTWARE', 'HARDWARE', 'CONNECTION', 'ACCESS_PERMISSIONS', 'ACQUISITION_IMAGE_QUALITY', 'OTHER'))):
         value = params.get(key, '')
         if value:
             if value not in allowed:
                 raise InvalidTicketFilters
-            conditions.append(column + ' = %s')
-            values.append(value)
+            if key == 'type' and value == 'USER_ISSUE':
+                conditions.append("ticket_type IN ('USER_REQUEST', 'USER_REPORT')")
+            else:
+                conditions.append(column + ' = %s')
+                values.append(value)
+    tag = params.get('tag', '')
+    if tag:
+        if not tag.isdecimal() or not 1 <= int(tag) <= 9223372036854775807:
+            raise InvalidTicketFilters
+        conditions.append('ticket_id IN (SELECT ticket_id FROM public.accounts_tickettagassignment WHERE tag_id = %s)')
+        values.append(int(tag))
     try:
         start = date.fromisoformat(params['startDate']) if params.get('startDate') else None
         end = date.fromisoformat(params['endDate']) if params.get('endDate') else None
@@ -338,12 +364,15 @@ def list_tickets(params, researcher_id=None):
         count = cursor.fetchone()[0]
         cursor.execute('SELECT ticket_id, reporter_name, microscope, message, status, priority, opened_at, ticket_type, issue_type, assigned_to, resolved_at, updated_at, source, (SELECT count(*) FROM public.microscope_ticket_image i WHERE i.ticket_id = public.microscope_ticket.ticket_id) FROM public.microscope_ticket' + where + ' ORDER BY ' + sorts[sort] + ' ' + order.upper() + ' NULLS LAST, ticket_id DESC LIMIT %s OFFSET %s', values + [size, (page - 1) * size])
         rows = cursor.fetchall()
-    from .models import TicketStaffAssignment
+    from .models import TicketStaffAssignment, TicketTagAssignment
     assignments = {}
     for item in TicketStaffAssignment.objects.filter(ticket_id__in=[row[0] for row in rows]).select_related('staff'):
         assignments.setdefault(item.ticket_id, []).append({'id': str(item.staff_id), 'name': item.staff.get_full_name() or item.staff.username})
+    tags = {}
+    for item in TicketTagAssignment.objects.filter(ticket_id__in=[row[0] for row in rows]).select_related('tag').order_by('tag__name'):
+        tags.setdefault(item.ticket_id, []).append({'id': str(item.tag_id), 'name': item.tag.name})
     return {'count': count, 'page': page, 'page_size': size, 'results': [
-        {'ticket_id': str(row[0]), 'reporter_name': row[1], 'microscope': row[2], 'message': row[3], 'status': row[4], 'priority': row[5], 'opened_at': row[6], 'ticket_type': row[7], 'issue_type': row[8], 'assigned_to': row[9], 'assigned_staff': assignments.get(row[0], []), 'resolved_at': row[10], 'updated_at': row[11], 'source': row[12], 'image_count': row[13]} for row in rows
+        {'ticket_id': str(row[0]), 'reporter_name': row[1], 'microscope': row[2], 'message': row[3], 'status': row[4], 'priority': row[5], 'opened_at': row[6], 'ticket_type': row[7], 'issue_type': row[8], 'assigned_to': row[9], 'assigned_staff': assignments.get(row[0], []), 'tags': tags.get(row[0], []), 'resolved_at': row[10], 'updated_at': row[11], 'source': row[12], 'image_count': row[13]} for row in rows
     ]}
 
 
