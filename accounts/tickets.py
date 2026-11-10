@@ -33,7 +33,7 @@ class TicketCreateForm(forms.Form):
 
 class TicketUpdateForm(forms.Form):
     version = forms.IntegerField(min_value=1, max_value=2147483647)
-    status = forms.ChoiceField(choices=[(value, value) for value in ('OPEN', 'IN_PROGRESS', 'WAITING', 'RESOLVED', 'CANCELLED')])
+    status = forms.ChoiceField(choices=[(value, value) for value in ('OPEN', 'IN_PROGRESS', 'RESOLVED', 'CANCELLED')])
     priority = forms.ChoiceField(choices=[(value, value) for value in ('LOW', 'NORMAL', 'HIGH', 'CRITICAL')])
     change_note = forms.CharField(max_length=2000, required=False, strip=True)
     resolution_note = forms.CharField(max_length=2000, required=False, strip=True)
@@ -336,7 +336,7 @@ def list_tickets(params, researcher_id=None):
     search = params.get('search', '').strip()
     statuses = params.getlist('status') if hasattr(params, 'getlist') else [params.get('status', 'all')]
     if not statuses:
-        statuses = ['OPEN', 'IN_PROGRESS', 'WAITING']
+        statuses = ['OPEN', 'IN_PROGRESS']
     if 'all' in statuses:
         statuses = []
     sorts = {'opened_at': 'opened_at', 'updated_at': 'updated_at', 'resolved_at': 'resolved_at', 'reporter_name': 'reporter_name', 'microscope': 'microscope', 'status': 'status', 'issue_type': 'issue_type', 'priority': "CASE priority WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3 WHEN 'NORMAL' THEN 2 ELSE 1 END"}
@@ -458,9 +458,9 @@ def ticket_summary(researcher_id=None):
             )
             SELECT COUNT(*) FILTER (WHERE t.opened_at <= c.current_time),
                    COUNT(*) FILTER (WHERE t.opened_at <= c.cutoff),
-                   COUNT(*) FILTER (WHERE t.status IN ('OPEN','IN_PROGRESS','WAITING')),
+                   COUNT(*) FILTER (WHERE t.status IN ('OPEN','IN_PROGRESS')),
                    CASE WHEN COUNT(*) FILTER (WHERE t.opened_at <= c.cutoff AND t.previous_status IS NULL) > 0 THEN NULL
-                        ELSE COUNT(*) FILTER (WHERE t.opened_at <= c.cutoff AND t.previous_status IN ('OPEN','IN_PROGRESS','WAITING')) END,
+                        ELSE COUNT(*) FILTER (WHERE t.opened_at <= c.cutoff AND t.previous_status IN ('OPEN','IN_PROGRESS')) END,
                    (SELECT COUNT(DISTINCT r.ticket_id) FROM resolutions r WHERE r.resolved_time > c.cutoff AND r.resolved_time <= c.current_time),
                    (SELECT COUNT(DISTINCT r.ticket_id) FROM resolutions r WHERE r.resolved_time > c.earlier AND r.resolved_time <= c.cutoff)
             FROM clock c LEFT JOIN historical t ON true GROUP BY c.cutoff, c.current_time, c.earlier

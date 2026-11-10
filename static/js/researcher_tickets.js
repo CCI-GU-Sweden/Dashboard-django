@@ -1,6 +1,6 @@
 (() => {
   const $ = id => document.getElementById(id), body = $('ticket-rows');
-  const label = value => ({OPEN: 'Open', IN_PROGRESS: 'In progress', WAITING: 'Waiting', RESOLVED: 'Resolved', CANCELLED: 'Cancelled', USER_REQUEST: 'User issue', USER_REPORT: 'User issue', INTERNAL_ISSUE: 'Technical issue'}[value] || value || '—');
+  const label = value => ({OPEN: 'Open', IN_PROGRESS: 'In progress', WAITING: 'Waiting (legacy)', RESOLVED: 'Resolved', CANCELLED: 'Cancelled', USER_REQUEST: 'User issue', USER_REPORT: 'User issue', INTERNAL_ISSUE: 'Technical issue'}[value] || value || '—');
   const date = value => value ? new Intl.DateTimeFormat(undefined, {timeZone: 'Europe/Stockholm', dateStyle: 'medium', timeStyle: 'short'}).format(new Date(value)) : '—';
   const node = (tag, text) => {const el = document.createElement(tag); el.textContent = text ?? ''; return el;};
   let page = 1, submissionId = null, equipment = new Map();

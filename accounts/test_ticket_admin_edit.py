@@ -5,7 +5,7 @@ from zipfile import ZipFile
 
 from django.test import TestCase
 from .models import TicketArchive, User
-from .tickets import TicketCreateForm, TicketConflict, TicketAdminEditForm, read_ticket
+from .tickets import TicketCreateForm, TicketConflict, TicketAdminEditForm, TicketUpdateForm, read_ticket
 
 
 class AdminTicketTests(TestCase):
@@ -33,6 +33,19 @@ class AdminTicketTests(TestCase):
         data = dict(self.payload, ticket_type='INCIDENT', priority='NORMAL', source_event_id='8ff8b72d-3646-4e0d-a16d-296b53d9a275')
         self.assertFalse(TicketCreateForm(data).is_valid())
         self.assertTrue(TicketAdminEditForm(data).is_valid())
+
+    def test_waiting_cannot_be_selected_for_ticket_updates(self):
+        update = {'version': 1, 'status': 'WAITING', 'priority': 'NORMAL'}
+        self.assertFalse(TicketUpdateForm(update).is_valid())
+        self.client.force_login(self.staff)
+        self.assertNotContains(self.client.get('/tickets/'), '<option value="WAITING">')
+        self.assertNotContains(self.client.get('/tickets/1/'), '<option value="WAITING">')
+        with patch('accounts.tickets.connection') as database:
+            cursor = database.cursor.return_value.__enter__.return_value
+            cursor.fetchone.return_value = (0,)
+            cursor.fetchall.return_value = []
+            self.assertEqual(self.client.get('/api/tickets').status_code, 200)
+            self.assertEqual(cursor.execute.call_args_list[0].args[1], ['OPEN', 'IN_PROGRESS'])
 
     def test_history_reads_json_returned_as_text_by_postgres(self):
         with patch('accounts.tickets.connection') as db:
