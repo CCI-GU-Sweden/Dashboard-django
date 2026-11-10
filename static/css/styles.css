@@ -1056,6 +1056,10 @@ tr.details-open .fileset-detail-button i {
 .ticket-dialog input[type=file] { height: auto; font-size: 0.85rem; }
 .ticket-dialog small { color: var(--muted); font-weight: 400; }
 .ticket-dialog #create-form textarea[name="message"] { min-height: 9rem; resize: vertical; }
+.ticket-dialog #create-tags[multiple] { height: auto; min-height: 7rem; }
+.ticket-dialog #clear-create-tags { justify-self: start; }
+#tags-list .ticket-event { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+#tags-list .ticket-event span { overflow-wrap: anywhere; min-width: 0; }
 .ticket-tag-choices { display: flex; flex-wrap: wrap; gap: .65rem 1.25rem; margin-top: .5rem; }
 .ticket-tag-choices label { display: inline-flex; align-items: center; gap: .4rem; }
 .ticket-tag-choices input { margin: 0; }
@@ -1116,6 +1120,7 @@ html[data-theme="dark"] .button.is-light, html[data-theme="dark"] .button:not(.i
 html[data-theme="dark"] .button.is-light:hover, html[data-theme="dark"] .button:not(.is-link):not(.is-danger):hover { background: #3a506c; color: #fff; }
 html[data-theme="dark"] .button:disabled { opacity: .55; }
 html[data-theme="dark"] table, html[data-theme="dark"] .table { background: transparent; color: var(--ink); }
+html[data-theme="dark"] table thead th { color: #f1f6ff; }
 html[data-theme="dark"] td, html[data-theme="dark"] th, html[data-theme="dark"] .equipment-row { border-color: var(--line); }
 html[data-theme="dark"] .table.is-striped tbody tr:not(.is-selected):nth-child(even),
 html[data-theme="dark"] #ticketTable tbody tr:nth-child(4n + 1),
