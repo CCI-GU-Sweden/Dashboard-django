@@ -14,6 +14,20 @@ INSTALLED_APPS = [
     'allauth', 'allauth.account', 'allauth.socialaccount',
     'allauth.socialaccount.providers.orcid', 'accounts',
 ]
+DASHBOARD_UPLOADS_ENABLED = os.environ.get('DASHBOARD_UPLOADS_ENABLED', '1') == '1'
+DASHBOARD_MODULES = []
+DASHBOARD_OMERO_ENABLED = os.environ.get('DASHBOARD_OMERO_ENABLED', '1') == '1'
+DASHBOARD_OMERO_BILLING_ENABLED = os.environ.get('DASHBOARD_OMERO_BILLING_ENABLED', '1') == '1'
+DASHBOARD_TICKETS_ENABLED = os.environ.get('DASHBOARD_TICKETS_ENABLED', '1') == '1'
+if DASHBOARD_UPLOADS_ENABLED:
+    INSTALLED_APPS.append('upload_stats')
+    DASHBOARD_MODULES.append('upload_stats.dashboard_module.module')
+if DASHBOARD_OMERO_ENABLED:
+    INSTALLED_APPS.append('omero_filesets')
+    DASHBOARD_MODULES.append('omero_filesets.dashboard_module.module')
+if DASHBOARD_TICKETS_ENABLED:
+    INSTALLED_APPS.append('dashboard_tickets')
+    DASHBOARD_MODULES.append('dashboard_tickets.dashboard_module.module')
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware', 'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware', 'django.middleware.common.CommonMiddleware',
@@ -24,6 +38,8 @@ MIDDLEWARE = [
 ROOT_URLCONF = 'dashboard.urls'
 TEMPLATES = [{'BACKEND': 'django.template.backends.django.DjangoTemplates', 'DIRS': [BASE_DIR / 'templates'], 'APP_DIRS': True,
               'OPTIONS': {'context_processors': ['django.template.context_processors.request', 'django.contrib.auth.context_processors.auth', 'django.contrib.messages.context_processors.messages']}}]
+if DASHBOARD_OMERO_ENABLED:
+    TEMPLATES[0]['OPTIONS']['context_processors'].append('omero_filesets.context.billing_context')
 WSGI_APPLICATION = 'dashboard.wsgi.application'
 AUTH_USER_MODEL = 'accounts.User'
 AUTHENTICATION_BACKENDS = ['django.contrib.auth.backends.ModelBackend', 'allauth.account.auth_backends.AuthenticationBackend']

@@ -1,8 +1,0 @@
-{% load static %}
-<dialog id="tags-dialog" class="ticket-dialog" data-admin="{% if user.role == 'admin' %}true{% else %}false{% endif %}" aria-labelledby="tags-title">
-  <header><h2 id="tags-title" class="title is-4">Manage tags</h2><button id="close-tags" class="delete" type="button" aria-label="Close"></button></header>
-  <div class="ticket-dialog-body"><p class="ticket-help">Tags help describe tickets. Staff can add tags and administrators can delete them.</p><div id="tags-list"></div>
-  <form id="tag-form"><label>New tag<input id="tag-name" class="input" maxlength="60" required></label><button class="button is-link" type="submit">Add tag</button></form><p id="tags-status" role="status"></p></div>
-  <footer><button class="button" id="close-tags-footer" type="button">Close</button></footer>
-</dialog>
-<script src="{% static 'js/ticket_tags.js' %}" defer></script>

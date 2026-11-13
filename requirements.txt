@@ -4,3 +4,6 @@ psycopg[binary]==3.3.8
 gunicorn==23.0.0
 whitenoise==6.12.0
 Pillow==11.3.0
+cci-dashboard-upload-stats @ https://github.com/CCI-GU-Sweden/dashboard-upload-stats/archive/141a055f457f94600548be1717b7e51ff216d60d.tar.gz
+cci-dashboard-omero-filesets @ https://github.com/CCI-GU-Sweden/dashboard-omero-filesets/archive/431b8db0f190710ff7443523a76017681d0aeedd.tar.gz
+cci-dashboard-tickets @ https://github.com/CCI-GU-Sweden/dashboard-tickets/archive/5103239ef1ad262cc66612d1b3b01a29c7fef03a.tar.gz

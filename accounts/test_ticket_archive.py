@@ -4,7 +4,8 @@ from unittest.mock import patch
 from django.db import DatabaseError
 from django.test import TestCase
 
-from .models import AuditEvent, TicketArchive, TicketResearcherLink, TicketStaffAssignment, User
+from .models import AuditEvent, User
+from dashboard_tickets.models import TicketArchive, TicketResearcherLink, TicketStaffAssignment
 
 
 class TicketArchiveTests(TestCase):
@@ -12,7 +13,7 @@ class TicketArchiveTests(TestCase):
         self.admin = User.objects.create_user(username='admin', role=User.Role.ADMIN)
         self.staff = User.objects.create_user(username='staff', role=User.Role.STAFF)
         self.researcher = User.objects.create_user(username='researcher', role=User.Role.RESEARCHER)
-        self.lock = patch('accounts.views.lock_ticket_for_archive', return_value=True)
+        self.lock = patch('dashboard_tickets.views.lock_ticket_for_archive', return_value=True)
         self.lock.start()
         self.addCleanup(self.lock.stop)
 
@@ -39,7 +40,7 @@ class TicketArchiveTests(TestCase):
 
     def test_missing_ticket_cannot_be_archived(self):
         self.client.force_login(self.staff)
-        with patch('accounts.views.lock_ticket_for_archive', return_value=False):
+        with patch('dashboard_tickets.views.lock_ticket_for_archive', return_value=False):
             self.assertEqual(self.post('archive', {'reason': 'Duplicate'}).status_code, 404)
         self.assertFalse(TicketArchive.objects.exists())
 
@@ -63,7 +64,7 @@ class TicketArchiveTests(TestCase):
         TicketResearcherLink.objects.create(ticket_id=42, researcher=self.researcher)
         TicketStaffAssignment.objects.create(ticket_id=42, staff=self.staff)
         self.client.force_login(self.admin)
-        with patch('accounts.views.purge_archived_ticket') as purge:
+        with patch('dashboard_tickets.views.purge_archived_ticket') as purge:
             self.assertEqual(self.post('delete', {'confirm_ticket_id': '42'}).status_code, 200)
             purge.assert_called_once_with(42)
         self.assertFalse(TicketArchive.objects.exists())
@@ -75,7 +76,7 @@ class TicketArchiveTests(TestCase):
         TicketArchive.objects.create(ticket_id=42, reason='Duplicate', archived_by=self.staff)
         TicketResearcherLink.objects.create(ticket_id=42, researcher=self.researcher)
         self.client.force_login(self.admin)
-        with patch('accounts.views.purge_archived_ticket', side_effect=DatabaseError):
+        with patch('dashboard_tickets.views.purge_archived_ticket', side_effect=DatabaseError):
             self.assertEqual(self.post('delete', {'confirm_ticket_id': '42'}).status_code, 503)
         self.assertTrue(TicketArchive.objects.filter(pk=42).exists())
         self.assertTrue(TicketResearcherLink.objects.filter(ticket_id=42).exists())

@@ -1,44 +1,12 @@
 from django.http import HttpResponseNotFound
 from django.urls import include, path, re_path
 from accounts import views
+from .module_views import module_overview
+from .modules import registered_modules
 
 urlpatterns = [
     path('', views.home, name='home'),
-    path('uploads/', views.uploads, name='uploads'),
-    path('api/uploads/summary', views.uploads_summary, name='uploads_summary'),
-    path('api/uploads/scopes', views.upload_scopes, name='upload_scopes'),
-    path('storage/', views.storage, name='storage'),
-    path('storage/billing/', views.billing, name='billing'),
-    path('api/omero/billing', views.billing_summary, name='billing_summary'),
-    path('api/omero/filesets', views.storage_filesets, name='storage_filesets'),
-    path('api/omero/filesets/<int:fileset_id>', views.fileset_detail, name='fileset_detail'),
-    path('api/omero/groups', views.storage_groups, name='storage_groups'),
-    path('api/omero/groups/<int:group_id>/email-draft', views.storage_email_draft, name='storage_email_draft'),
-    path('api/omero/history', views.storage_history, name='storage_history'),
-    path('api/omero/overview', views.storage_overview, name='storage_overview'),
-    path('api/omero/overview-card', views.storage_overview_card, name='storage_overview_card'),
-    path('api/omero/policies', views.create_storage_policy, name='create_storage_policy'),
-    path('api/omero/admin/<str:kind>', views.storage_admin_data, name='storage_admin_data'),
-    path('tickets/', views.tickets, name='tickets'),
-    path('api/tickets', views.ticket_inventory, name='ticket_inventory'),
-    path('api/tickets/summary', views.ticket_summary, name='ticket_summary'),
-    path('api/tickets/archived', views.archived_tickets, name='archived_tickets'),
-    path('api/tickets/tags', views.ticket_tags, name='ticket_tags'),
-    path('api/tickets/tags/<int:tag_id>', views.ticket_tags, name='ticket_tag'),
-    path('api/tickets/equipment', views.ticket_equipment, name='ticket_equipment'),
-    path('api/tickets/equipment/manage', views.manage_ticket_equipment, name='manage_ticket_equipment'),
-    path('api/tickets/equipment/manage/<str:equipment_id>', views.manage_ticket_equipment, name='manage_ticket_equipment_item'),
-    path('api/tickets/staff', views.ticket_staff, name='ticket_staff'),
-    path('api/tickets/researchers', views.ticket_researchers, name='ticket_researchers'),
-    path('tickets/<int:ticket_id>/', views.ticket_detail, name='ticket_detail'),
-    path('api/tickets/<int:ticket_id>', views.ticket_detail_data, name='ticket_detail_data'),
-    path('api/tickets/<int:ticket_id>/researcher', views.ticket_researcher_link, name='ticket_researcher_link'),
-    path('api/tickets/<int:ticket_id>/tags', views.ticket_tag_assignments, name='ticket_tag_assignments'),
-    path('api/tickets/<int:ticket_id>/admin-edit', views.ticket_admin_edit, name='ticket_admin_edit'),
-    path('api/tickets/<int:ticket_id>/images/<int:image_id>/remove', views.ticket_admin_remove_image, name='ticket_admin_remove_image'),
-    path('api/tickets/<int:ticket_id>/export', views.ticket_export, name='ticket_export'),
-    path('api/tickets/<int:ticket_id>/<str:action>/archive-action', views.ticket_archive_action, name='ticket_archive_action'),
-    path('api/tickets/<int:ticket_id>/images/<int:image_id>', views.ticket_image, name='ticket_image'),
+    path('api/modules/<slug:module_key>/overview', module_overview, name='module_overview'),
     path('health/live/', views.live, name='live'),
     path('health/ready/', views.ready, name='ready'),
     path('administration/', views.administration, name='administration'),
@@ -49,3 +17,6 @@ urlpatterns = [
     re_path(r'^accounts/(?:login|signup|password(?:/.*)?|email(?:/.*)?|3rdparty/connections)/?$', lambda request: HttpResponseNotFound()),
     path('accounts/', include('allauth.urls')),
 ]
+
+for module in registered_modules():
+    urlpatterns += [path('', include(module.urlconf))]

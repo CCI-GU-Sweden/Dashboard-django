@@ -6,7 +6,8 @@ from django.core.management import call_command, CommandError
 from django.test import Client, TestCase
 from django.urls import reverse
 from allauth.socialaccount.models import SocialAccount
-from .models import AuditEvent, TicketResearcherLink, User, VerifiedOmeroGroup
+from .models import AuditEvent, User, VerifiedOmeroGroup
+from dashboard_tickets.models import TicketResearcherLink
 
 
 class AccessTests(TestCase):
@@ -53,7 +54,7 @@ class AccessTests(TestCase):
         self.pending.save(update_fields=['role'])
         self.assertEqual(self.client.get(url).status_code, 403)
         VerifiedOmeroGroup.objects.create(user=self.pending, group_id=42, valid_until=django_timezone.localdate() + timedelta(days=1), verified_by=self.admin)
-        with patch('accounts.storage.connection') as database:
+        with patch('omero_filesets.data.connection') as database:
             cursor = database.cursor.return_value.__enter__.return_value
             cursor.fetchall.return_value = [('current', date(2026, 11, 8), 4, 2), ('previous', date(2026, 10, 9), 2, 1)]
             response = self.client.get(url, {'group_id': '999'})
@@ -80,7 +81,7 @@ class AccessTests(TestCase):
 
     def test_storage_overview_card_without_snapshots_is_not_zero(self):
         self.client.force_login(self.admin)
-        with patch('accounts.storage.connection') as database:
+        with patch('omero_filesets.data.connection') as database:
             database.cursor.return_value.__enter__.return_value.fetchall.return_value = []
             response = self.client.get(reverse('storage_overview_card'))
         self.assertEqual(response.status_code, 200)
@@ -104,7 +105,7 @@ class AccessTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, 'Storage policies')
         self.assertNotContains(response, 'groupRankingChart')
-        with patch('accounts.storage.connection') as database:
+        with patch('omero_filesets.data.connection') as database:
             cursor = database.cursor.return_value.__enter__.return_value
             cursor.fetchone.return_value = (0,)
             cursor.fetchall.return_value = []
@@ -117,7 +118,7 @@ class AccessTests(TestCase):
             self.assertIn([42, 43], cursor.execute.call_args.args[1])
             self.assertEqual(self.client.get(reverse('storage_history'), {'metric': 'ore'}).status_code, 400)
             self.assertEqual(self.client.get(reverse('storage_overview')).status_code, 403)
-        with patch('accounts.views.connection') as database:
+        with patch('omero_filesets.views.connection') as database:
             database.cursor.return_value.__enter__.return_value.fetchone.return_value = None
             self.assertEqual(self.client.get(reverse('fileset_detail', args=[123])).status_code, 404)
             self.assertEqual(database.cursor.return_value.__enter__.return_value.execute.call_args.args[1], [123, [42, 43]])
@@ -163,7 +164,7 @@ class AccessTests(TestCase):
 
     def test_fileset_details_decode_database_json_and_filter_location_fields(self):
         self.client.force_login(self.admin)
-        with patch('accounts.views.connection') as database:
+        with patch('omero_filesets.views.connection') as database:
             cursor = database.cursor.return_value.__enter__.return_value
             cursor.fetchone.return_value = (None, None, 0, None, 0, None, '["image.czi"]', '[{"project_id": 1, "project_name": "Project", "dataset_id": 2, "dataset_name": "Dataset", "client_path": "/secret"}]')
             response = self.client.get(reverse('fileset_detail', args=[3]))
@@ -180,7 +181,7 @@ class AccessTests(TestCase):
             self.assertEqual(self.client.get(reverse('storage_email_draft', args=[1])).status_code, 403)
             self.assertNotContains(self.client.get(reverse('storage')), 'Generate email', status_code=403 if role == User.Role.RESEARCHER else 200)
         self.client.force_login(self.admin)
-        with patch('accounts.storage.connection') as database:
+        with patch('omero_filesets.data.connection') as database:
             cursor = database.cursor.return_value.__enter__.return_value
             from datetime import date
             cursor.fetchone.return_value = ('Group', date(2026, 1, 1), 10, 5, 2, 'TEMPORARY', 30, 7, 1)
@@ -277,7 +278,7 @@ class AccessTests(TestCase):
 
     def test_upload_data_is_only_available_to_staff_and_admin(self):
         endpoint = reverse('uploads_summary')
-        with patch('accounts.uploads.upload_summary', return_value={'total_files': 42}) as summary:
+        with patch('upload_stats.data.upload_summary', return_value={'total_files': 42}) as summary:
             self.assertEqual(self.client.get(endpoint).status_code, 403)
             for role in ('', User.Role.RESEARCHER):
                 self.pending.role = role
@@ -302,7 +303,7 @@ class AccessTests(TestCase):
 
     def test_upload_invalid_filters_do_not_query_database(self):
         self.client.force_login(self.admin)
-        with patch('accounts.uploads.connection') as database:
+        with patch('upload_stats.data.connection') as database:
             for query in ('?period=0', '?period=999999', '?startDate=2026-01-01', '?startDate=2026-03-01&endDate=2026-02-01'):
                 self.assertEqual(self.client.get(reverse('uploads_summary') + query).status_code, 400)
             database.cursor.assert_not_called()
@@ -313,7 +314,7 @@ class AccessTests(TestCase):
             ('Scope A', datetime(2026, 1, 3, tzinfo=timezone.utc), 'private-user', 3, 1024, 120),
             ('Scope A', datetime(2026, 1, 4, tzinfo=timezone.utc), 'private-user', 2, 512, 60),
         ]
-        with patch('accounts.uploads.connection') as database:
+        with patch('upload_stats.data.connection') as database:
             database.cursor.return_value.__enter__.return_value.fetchall.return_value = rows
             response = self.client.get(reverse('uploads_summary'), {'startDate': '2026-01-01', 'endDate': '2026-01-31'})
         self.assertEqual(response.status_code, 200)
@@ -330,7 +331,7 @@ class AccessTests(TestCase):
             ('Scope B', datetime(2026, 1, 3, tzinfo=timezone.utc), 'person', 2, 512, 60),
             ('Scope A', datetime(2026, 1, 4, tzinfo=timezone.utc), 'person', 1, 256, 30),
         ]
-        with patch('accounts.uploads.connection') as database:
+        with patch('upload_stats.data.connection') as database:
             cursor = database.cursor.return_value.__enter__.return_value
             cursor.fetchall.return_value = rows
             cursor.fetchone.return_value = (1024,)
@@ -354,7 +355,7 @@ class AccessTests(TestCase):
         self.pending.role = User.Role.RESEARCHER
         self.pending.save(update_fields=['role'])
         self.client.force_login(self.pending)
-        with patch('accounts.storage.connection') as database:
+        with patch('omero_filesets.data.connection') as database:
             self.assertEqual(self.client.get(reverse('storage')).status_code, 403)
             self.assertEqual(self.client.get(reverse('storage_filesets')).status_code, 403)
             database.cursor.assert_not_called()
@@ -374,7 +375,7 @@ class AccessTests(TestCase):
         self.pending.role = User.Role.RESEARCHER
         self.pending.save(update_fields=['role'])
         self.client.force_login(self.pending)
-        with patch('accounts.tickets.connection') as database:
+        with patch('dashboard_tickets.data.connection') as database:
             self.assertEqual(self.client.get(reverse('tickets')).status_code, 200)
             cursor = database.cursor.return_value.__enter__.return_value
             cursor.fetchone.return_value = (0,)
@@ -396,7 +397,7 @@ class AccessTests(TestCase):
             self.assertEqual(response.json()['results'][0]['status'], 'OPEN')
 
     def test_billing_is_admin_only_even_for_direct_api_requests(self):
-        with patch('accounts.storage.connection') as database:
+        with patch('omero_filesets.data.connection') as database:
             for role in ('', User.Role.RESEARCHER, User.Role.STAFF):
                 self.pending.role = role
                 self.pending.save(update_fields=['role'])
@@ -419,7 +420,7 @@ class AccessTests(TestCase):
         for group, days in [(42, 10), (43, 30), (44, -1)]:
             VerifiedOmeroGroup.objects.create(user=self.pending, group_id=group, valid_until=django_timezone.localdate() + timedelta(days=days), verified_by=self.admin)
         self.client.force_login(self.pending)
-        with patch('accounts.storage.connection') as database:
+        with patch('omero_filesets.data.connection') as database:
             cursor = database.cursor.return_value.__enter__.return_value
             cursor.fetchall.return_value = [(42, 'Group', 2, 1, 3)]
             result = self.client.get(reverse('billing_summary'), {'startDate': '2026-02-01', 'endDate': '2026-02-02', 'group_id': '999'})
@@ -431,20 +432,20 @@ class AccessTests(TestCase):
 
     def test_ticket_update_supports_multiple_staff_and_rejects_researchers(self):
         import json
-        from .models import TicketStaffAssignment
+        from dashboard_tickets.models import TicketStaffAssignment
         staff = User.objects.create_user(username='staff-person', role=User.Role.STAFF)
         self.pending.role = User.Role.RESEARCHER
         self.pending.save(update_fields=['role'])
         self.client.force_login(self.admin)
         payload = {'version': 1, 'status': 'OPEN', 'priority': 'NORMAL', 'assigned_staff': json.dumps([str(self.admin.pk), str(staff.pk)])}
-        with patch('accounts.tickets.connection') as database:
+        with patch('dashboard_tickets.data.connection') as database:
             cursor = database.cursor.return_value.__enter__.return_value
             cursor.fetchone.side_effect = [('OPEN', 'NORMAL', None, 1, None, None), (2,)]
             result = self.client.patch(reverse('ticket_detail_data', args=[123]), data=json.dumps(payload), content_type='application/json')
             self.assertEqual(result.status_code, 200, result.content)
         self.assertEqual(set(TicketStaffAssignment.objects.filter(ticket_id=123).values_list('staff_id', flat=True)), {self.admin.pk, staff.pk})
         payload['assigned_staff'] = json.dumps([str(self.pending.pk)])
-        with patch('accounts.tickets.connection') as database:
+        with patch('dashboard_tickets.data.connection') as database:
             database.cursor.return_value.__enter__.return_value.fetchone.return_value = ('OPEN', 'NORMAL', None, 2, None, None)
             payload['version'] = 2
             self.assertEqual(self.client.patch(reverse('ticket_detail_data', args=[123]), data=json.dumps(payload), content_type='application/json').status_code, 400)
@@ -454,7 +455,7 @@ class AccessTests(TestCase):
         self.pending.role = User.Role.RESEARCHER
         self.pending.save(update_fields=['role'])
         self.client.force_login(self.pending)
-        with patch('accounts.tickets.connection') as database, patch('accounts.views.connection') as view_database:
+        with patch('dashboard_tickets.data.connection') as database, patch('dashboard_tickets.views.connection') as view_database:
             database.cursor.return_value.__enter__.return_value.fetchone.return_value = None
             view_database.cursor.return_value.__enter__.return_value.fetchone.return_value = None
             self.assertEqual(self.client.get(reverse('ticket_detail', args=[1])).status_code, 403)
@@ -464,7 +465,7 @@ class AccessTests(TestCase):
             self.assertIn(self.pending.pk, view_database.cursor.return_value.__enter__.return_value.execute.call_args.args[1])
         self.pending.role = User.Role.STAFF
         self.pending.save(update_fields=['role'])
-        with patch('accounts.tickets.connection') as database:
+        with patch('dashboard_tickets.data.connection') as database:
             database.cursor.return_value.__enter__.return_value.fetchone.return_value = None
             self.assertEqual(self.client.get(reverse('ticket_detail_data', args=[1])).status_code, 404)
 
@@ -480,7 +481,7 @@ class AccessTests(TestCase):
         csrf_client = Client(enforce_csrf_checks=True)
         csrf_client.force_login(self.pending)
         self.assertEqual(csrf_client.post(reverse('ticket_inventory'), data=json.dumps(payload), content_type='application/json').status_code, 403)
-        with patch('accounts.tickets.connection') as database:
+        with patch('dashboard_tickets.data.connection') as database:
             cursor = database.cursor.return_value.__enter__.return_value
             cursor.fetchone.return_value = (25, 1)
             result = self.client.post(reverse('ticket_inventory'), data=json.dumps(payload), content_type='application/json')
@@ -505,7 +506,7 @@ class AccessTests(TestCase):
         self.assertTrue(researcher.can_create_tickets)
         self.assertTrue(AuditEvent.objects.filter(target=researcher, action='account_updated').exists())
         self.client.force_login(researcher)
-        with patch('accounts.tickets.connection') as database:
+        with patch('dashboard_tickets.data.connection') as database:
             database.cursor.return_value.__enter__.return_value.fetchone.return_value = (77, 1)
             response = self.client.post(reverse('ticket_inventory'), data=json.dumps(payload), content_type='application/json')
         self.assertEqual(response.status_code, 201)
@@ -558,7 +559,7 @@ class AccessTests(TestCase):
         self.client.force_login(researcher)
         self.assertEqual(self.client.patch(url, data=json.dumps(payload), content_type='application/json').status_code, 403)
         self.client.force_login(self.admin)
-        with patch('accounts.views.connection') as database:
+        with patch('dashboard_tickets.views.connection') as database:
             database.cursor.return_value.__enter__.return_value.fetchone.return_value = (12,)
             self.assertEqual(self.client.patch(url, data=json.dumps(payload), content_type='application/json').status_code, 200)
             self.assertTrue(TicketResearcherLink.objects.filter(ticket_id=12, researcher=researcher).exists())
@@ -574,7 +575,7 @@ class AccessTests(TestCase):
         researcher.role = User.Role.RESEARCHER
         researcher.save(update_fields=['role'])
         self.client.force_login(researcher)
-        with patch('accounts.tickets.connection') as database:
+        with patch('dashboard_tickets.data.connection') as database:
             cursor = database.cursor.return_value.__enter__.return_value
             cursor.fetchone.return_value = (1, 0, 1, 0, 0, 0)
             response = self.client.get(reverse('ticket_summary'))
@@ -603,7 +604,7 @@ class AccessTests(TestCase):
         self.assertEqual(self.client.patch(reverse('ticket_detail_data', args=[1]), data=json.dumps(payload), content_type='application/json').status_code, 403)
         self.pending.role = User.Role.STAFF
         self.pending.save(update_fields=['role'])
-        with patch('accounts.tickets.connection') as database:
+        with patch('dashboard_tickets.data.connection') as database:
             cursor = database.cursor.return_value.__enter__.return_value
             cursor.fetchone.return_value = ('RESOLVED', 'NORMAL', 'closed', 3, None, None)
             self.assertEqual(self.client.patch(reverse('ticket_detail_data', args=[1]), data=json.dumps(payload), content_type='application/json').status_code, 409)
@@ -619,7 +620,7 @@ class AccessTests(TestCase):
         from django.core.files.uploadedfile import SimpleUploadedFile
         from io import BytesIO
         from PIL import Image
-        from .tickets import InvalidTicketFilters, validate_images
+        from dashboard_tickets.data import InvalidTicketFilters, validate_images
         buffer = BytesIO()
         Image.new('RGB', (2, 2), 'red').save(buffer, format='PNG')
         valid = SimpleUploadedFile('sample.png', buffer.getvalue(), content_type='image/png')
@@ -649,13 +650,13 @@ class AccessTests(TestCase):
                 user.can_create_tickets = True
                 user.save(update_fields=['role', 'can_create_tickets'])
             self.client.force_login(user)
-            with patch('accounts.tickets.connection') as database:
+            with patch('dashboard_tickets.data.connection') as database:
                 database.cursor.return_value.__enter__.return_value.fetchone.return_value = (100 + user.pk, 1)
                 response = self.client.generic('POST', reverse('ticket_inventory'), browser_body(create), content_type=content_type)
             self.assertEqual(response.status_code, 201, response.content)
         self.client.force_login(self.admin)
         update = {'version': '1', 'status': 'IN_PROGRESS', 'priority': 'NORMAL', 'change_note': 'Update', 'resolution_note': '', 'issue_type': '', 'assigned_to': ''}
-        with patch('accounts.tickets.connection') as database:
+        with patch('dashboard_tickets.data.connection') as database:
             database.cursor.return_value.__enter__.return_value.fetchone.side_effect = [('OPEN', 'NORMAL', None, 1, None, None), (2,)]
             response = self.client.generic('POST', reverse('ticket_detail_data', args=[1]), browser_body(update), content_type=content_type)
         self.assertEqual(response.status_code, 200, response.content)
@@ -675,7 +676,7 @@ class AccessTests(TestCase):
         self.assertEqual(response.json()['error'], 'Images must be uploaded as files.')
 
     def test_ticket_staff_list_and_assignments_exclude_researchers(self):
-        from .tickets import TicketUpdateForm, update_ticket, InvalidTicketFilters
+        from dashboard_tickets.data import TicketUpdateForm, update_ticket, InvalidTicketFilters
         self.pending.role = User.Role.RESEARCHER
         self.pending.save(update_fields=['role'])
         self.client.force_login(self.pending)
@@ -684,16 +685,16 @@ class AccessTests(TestCase):
         self.assertNotIn(str(self.pending.pk), [item['id'] for item in self.client.get(reverse('ticket_staff')).json()['staff']])
         form = TicketUpdateForm({'version': 1, 'status': 'OPEN', 'priority': 'NORMAL', 'assigned_to': str(self.pending.pk)})
         self.assertTrue(form.is_valid())
-        with patch('accounts.tickets.connection') as database:
+        with patch('dashboard_tickets.data.connection') as database:
             database.cursor.return_value.__enter__.return_value.fetchone.return_value = ('OPEN', 'NORMAL', None, 1, None, None)
             with self.assertRaises(InvalidTicketFilters):
                 update_ticket(1, form, self.admin)
 
     def test_ticket_attachment_limit_is_checked_before_update(self):
-        from .tickets import TicketUpdateForm, update_ticket, InvalidTicketFilters
+        from dashboard_tickets.data import TicketUpdateForm, update_ticket, InvalidTicketFilters
         form = TicketUpdateForm({'version': 1, 'status': 'OPEN', 'priority': 'NORMAL'})
         self.assertTrue(form.is_valid())
-        with patch('accounts.tickets.connection') as database:
+        with patch('dashboard_tickets.data.connection') as database:
             cursor = database.cursor.return_value.__enter__.return_value
             cursor.fetchone.side_effect = [('OPEN', 'NORMAL', None, 1, None, None), (5,)]
             with self.assertRaises(InvalidTicketFilters):
@@ -702,7 +703,7 @@ class AccessTests(TestCase):
 
     def test_equipment_filter_uses_exact_equipment_id_and_name(self):
         self.client.force_login(self.admin)
-        with patch('accounts.tickets.connection') as database:
+        with patch('dashboard_tickets.data.connection') as database:
             cursor = database.cursor.return_value.__enter__.return_value
             cursor.fetchone.return_value = (0,)
             cursor.fetchall.return_value = []
@@ -731,7 +732,7 @@ class AccessTests(TestCase):
     def test_equipment_add_edit_and_stale_edit_are_audited(self):
         import json
         self.client.force_login(self.admin)
-        with patch('accounts.tickets.connection') as database:
+        with patch('dashboard_tickets.data.connection') as database:
             cursor = database.cursor.return_value.__enter__.return_value
             response = self.client.post(reverse('manage_ticket_equipment'), data=json.dumps({'name': '  Test scope  ', 'category': 'microscope'}), content_type='application/json')
             self.assertEqual(response.status_code, 201)
@@ -758,7 +759,7 @@ class AccessTests(TestCase):
         self.assertEqual(self.client.get(reverse('fileset_detail', args=[1])).status_code, 403)
         self.pending.role = User.Role.STAFF
         self.pending.save(update_fields=['role'])
-        with patch('accounts.storage.connection') as database:
+        with patch('omero_filesets.data.connection') as database:
             cursor = database.cursor.return_value.__enter__.return_value
             self.assertEqual(self.client.get(reverse('storage_filesets'), {'size': 'bad'}).status_code, 400)
             database.cursor.assert_not_called()

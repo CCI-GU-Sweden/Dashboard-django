@@ -3,8 +3,9 @@ from unittest.mock import patch
 
 from django.test import TestCase
 
-from .models import AuditEvent, TicketArchive, TicketTag, TicketTagAssignment, User
-from .tickets import InvalidTicketFilters, parse_ticket_tags
+from .models import AuditEvent, User
+from dashboard_tickets.models import TicketArchive, TicketTag, TicketTagAssignment
+from dashboard_tickets.data import InvalidTicketFilters, parse_ticket_tags
 
 
 class TicketTagTests(TestCase):
@@ -38,7 +39,7 @@ class TicketTagTests(TestCase):
         tag = TicketTag.objects.create(name='Software')
         self.client.force_login(self.staff)
         path = '/api/tickets/42/tags'
-        with patch('accounts.views.lock_ticket_for_archive', return_value=True):
+        with patch('dashboard_tickets.views.lock_ticket_for_archive', return_value=True):
             self.assertEqual(self.request_json('patch', path, {'tags': [str(tag.pk)], 'expected': []}).status_code, 200)
             self.assertEqual(self.request_json('patch', path, {'tags': [], 'expected': []}).status_code, 409)
             self.assertEqual(self.client.get(path).json()['tags'][0]['name'], 'Software')
@@ -55,7 +56,7 @@ class TicketTagTests(TestCase):
             with self.assertRaises(InvalidTicketFilters):
                 parse_ticket_tags(value)
         self.client.force_login(self.staff)
-        with patch('accounts.tickets.connection') as database:
+        with patch('dashboard_tickets.data.connection') as database:
             cursor = database.cursor.return_value.__enter__.return_value
             cursor.fetchone.return_value = (0,)
             cursor.fetchall.return_value = []
@@ -64,7 +65,7 @@ class TicketTagTests(TestCase):
 
     def test_ticket_id_filter_is_exact_and_validated(self):
         self.client.force_login(self.staff)
-        with patch('accounts.tickets.connection') as database:
+        with patch('dashboard_tickets.data.connection') as database:
             cursor = database.cursor.return_value.__enter__.return_value
             cursor.fetchone.return_value = (0,)
             cursor.fetchall.return_value = []

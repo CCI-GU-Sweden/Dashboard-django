@@ -4,8 +4,9 @@ from unittest.mock import patch
 from zipfile import ZipFile
 
 from django.test import TestCase
-from .models import TicketArchive, User
-from .tickets import TicketCreateForm, TicketConflict, TicketAdminEditForm, TicketUpdateForm, read_ticket
+from .models import User
+from dashboard_tickets.models import TicketArchive
+from dashboard_tickets.data import TicketCreateForm, TicketConflict, TicketAdminEditForm, TicketUpdateForm, read_ticket
 
 
 class AdminTicketTests(TestCase):
@@ -24,7 +25,7 @@ class AdminTicketTests(TestCase):
             self.assertEqual(self.post('/api/tickets/1/admin-edit', self.payload).status_code, 403)
             self.assertEqual(self.post('/api/tickets/1/images/2/remove', {'version': 1}).status_code, 403)
         self.client.force_login(self.admin)
-        with patch('accounts.tickets.admin_edit_ticket', side_effect=TicketConflict('Stale ticket')):
+        with patch('dashboard_tickets.data.admin_edit_ticket', side_effect=TicketConflict('Stale ticket')):
             response = self.post('/api/tickets/1/admin-edit', self.payload)
             self.assertEqual(response.status_code, 409)
             self.assertEqual(response.json()['error'], 'Stale ticket')
@@ -40,7 +41,7 @@ class AdminTicketTests(TestCase):
         self.client.force_login(self.staff)
         self.assertNotContains(self.client.get('/tickets/'), '<option value="WAITING">')
         self.assertNotContains(self.client.get('/tickets/1/'), '<option value="WAITING">')
-        with patch('accounts.tickets.connection') as database:
+        with patch('dashboard_tickets.data.connection') as database:
             cursor = database.cursor.return_value.__enter__.return_value
             cursor.fetchone.return_value = (0,)
             cursor.fetchall.return_value = []
@@ -48,7 +49,7 @@ class AdminTicketTests(TestCase):
             self.assertEqual(cursor.execute.call_args_list[0].args[1], ['OPEN', 'IN_PROGRESS'])
 
     def test_history_reads_json_returned_as_text_by_postgres(self):
-        with patch('accounts.tickets.connection') as db:
+        with patch('dashboard_tickets.data.connection') as db:
             cursor = db.cursor.return_value.__enter__.return_value
             cursor.fetchone.return_value = (7, 'Name', 'r@example.org', '', 'New', 'USER_REQUEST', None, 'NORMAL', 'OPEN', None, None, None, None, 2, None)
             cursor.fetchall.side_effect = [[('UPDATED', 'OPEN', 'OPEN', 'Edited', 'Staff', None, json.dumps({'admin_edit': {'message': {'before': 'Old', 'after': 'New'}}}))], []]
@@ -59,7 +60,7 @@ class AdminTicketTests(TestCase):
         self.assertEqual(self.client.get('/api/tickets/7/export').status_code, 403)
         self.client.force_login(self.staff)
         ticket = {'ticket_id': '7', 'reporter_name': 'Name', 'reporter_identifier': 'r@example.org', 'microscope': 'id', 'ticket_type': 'USER_REPORT', 'issue_type': 'SOFTWARE', 'priority': 'NORMAL', 'status': 'OPEN', 'assigned_staff': [], 'assigned_to_name': None, 'opened_at': None, 'updated_at': None, 'resolved_at': None, 'message': 'Problem', 'resolution_note': None, 'events': [{'occurred_at': None, 'actor': 'Staff', 'type': 'UPDATED', 'old_status': 'OPEN', 'new_status': 'OPEN', 'note': 'Edited', 'admin_edit': {'message': {'before': 'Old', 'after': 'Problem'}}}]}
-        with patch('accounts.tickets.read_ticket', return_value=ticket), patch('accounts.views.connection') as db:
+        with patch('dashboard_tickets.data.read_ticket', return_value=ticket), patch('dashboard_tickets.views.connection') as db:
             cursor = db.cursor.return_value.__enter__.return_value
             cursor.fetchone.return_value = ('Microscope A',)
             cursor.fetchall.return_value = [(3, '../image.png', 'png', b'image bytes')]
