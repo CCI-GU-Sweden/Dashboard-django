@@ -28,6 +28,14 @@ if DASHBOARD_OMERO_ENABLED:
 if DASHBOARD_TICKETS_ENABLED:
     INSTALLED_APPS.append('dashboard_tickets')
     DASHBOARD_MODULES.append('dashboard_tickets.dashboard_module.module')
+
+# The registry owns its tables and uses the dashboard's configured users/session.
+DASHBOARD_GRIDS_ENABLED = os.environ.get('DASHBOARD_GRIDS_ENABLED', '0') == '1'
+CCI_GRIDS_DASHBOARD = DASHBOARD_GRIDS_ENABLED
+if DASHBOARD_GRIDS_ENABLED:
+    INSTALLED_APPS.append('cci_grids.apps.RegistryConfig')
+    DASHBOARD_MODULES.append('cci_grids.dashboard_module.module')
+
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware', 'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware', 'django.middleware.common.CommonMiddleware',
