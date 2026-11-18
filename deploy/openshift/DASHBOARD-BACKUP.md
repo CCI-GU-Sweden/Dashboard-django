@@ -1,5 +1,47 @@
 # Dashboard database backup and recovery
 
+## Production: initial scheduled backups
+
+On 2026-11-10, a separate `dashboard-filestatistics-backup` CronJob was
+created in `core-omero-prod`. It runs Monday through Friday at 06:20
+`Europe/Stockholm`, using `dashboard-backup-reader` and writing to
+`/postgresbackup/production-filestatistics` on the existing shared PVC. Its
+first manually started Job, `dashboard-filestatistics-first-backup`, succeeded:
+`pg_dump`, full archive reading and SHA-256 verification completed. At that
+time the PVC reported 9.3 GiB available.
+
+Retention keeps the latest backup from each of five weekdays and five older
+Friday backups. A separately pinned first backup,
+`backup-20261110T165358-p8hCuj6V`, is retained in addition to those ten points;
+its pin is configured in the CronJob. The fresh pre-migration backup
+`backup-20261111T090536-SePuEOll` is also pinned by a `KEEP` file. Preserve
+both until recovery procedures and migration have been fully validated. Each
+backup is stored in one directory, so Friday snapshots
+are retained by selection, not copied or moved. The job verifies every existing
+archive's checksum before deleting any excess snapshots. An incomplete backup,
+failed checksum, invalid directory name, or retention lock prevents pruning.
+The new backup must pass `pg_dump`, archive-read and checksum checks before
+retention runs. Local synthetic retention tests covered rotation, a missing
+Friday, pinned archives and corruption; a production verification Job completed.
+The CronJob mounts ConfigMap `dashboard-backup-retention`, whose
+`production-backup-rotation.sh` key is sourced from the matching script in this
+directory. Recreate or update that ConfigMap from the reviewed script when
+restoring the CronJob; the CronJob YAML alone does not include the script.
+
+The scheduled archive from 2026-11-11 was restored successfully in an isolated
+PostgreSQL instance. The ticket/Django migration and a backup-reader dump were
+also rehearsed against a restored copy. A fresh backup after the production
+administrator login completed successfully. Monitor capacity and Job failures;
+an off-cluster copy and dedicated backup-alert configuration are not yet verified.
+The 06:20 backup normally
+follows the 06:15 imports rollup; recent observed rollups took 5–7 seconds.
+PostgreSQL's dump uses a consistent snapshot if the jobs overlap.
+
+The production backup reader was granted access to the tables and sequences
+existing when it was created. Schema changes need corresponding grants, followed
+by another verified backup; otherwise backups can fail. The archive excludes
+owners, ACLs, global roles and Kubernetes Secrets.
+
 ## Test cluster configuration
 
 `dashboard-filestatistics-backup` backs up the dashboard's `omerofilestats`

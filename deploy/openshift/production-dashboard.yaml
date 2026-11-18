@@ -1,0 +1,70 @@
+# Initial cutover snapshot only. Do not reapply the Deployment's replicas: 0 to
+# the running service: it would scale production down and interfere with HPA.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: dashboard-django-config, namespace: core-omero-prod}
+data:
+  DJANGO_DEBUG: '0'
+  DJANGO_ALLOWED_HOSTS: dashboard-probe.local,dashboard-omero.apps.k8s.gu.se
+  DJANGO_CSRF_TRUSTED_ORIGINS: https://dashboard-omero.apps.k8s.gu.se
+  DJANGO_TRUST_PROXY_HTTPS: '1'
+  ORCID_ENVIRONMENT: production
+---
+apiVersion: v1
+kind: Service
+metadata: {name: dashboard-django, namespace: core-omero-prod}
+spec:
+  selector: {app: dashboard-django}
+  ports:
+    - {name: http, port: 80, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: dashboard-django, namespace: core-omero-prod}
+spec:
+  replicas: 0
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels: {app: dashboard-django}
+  template:
+    metadata:
+      labels: {app: dashboard-django}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: web
+          image: image-registry.openshift-image-registry.svc:5000/core-omero-prod/dashboard-django@sha256:1fe5f141037681554c0b5998e7c5a49109ff1367b827f897e2950ef7cc093fe1
+          imagePullPolicy: IfNotPresent
+          ports: [{name: http, containerPort: 8000, protocol: TCP}]
+          envFrom:
+            - configMapRef: {name: dashboard-django-config}
+            - secretRef: {name: dashboard-django-app}
+          env:
+            - {name: PGHOST, value: filestatistics-pg15}
+            - {name: PGPORT, value: '5432'}
+            - name: PGDATABASE
+              valueFrom: {secretKeyRef: {name: filestatistics-app-credentials, key: PGDATABASE}}
+            - name: PGUSER
+              valueFrom: {secretKeyRef: {name: filestatistics-app-credentials, key: PGUSER_DASHBOARD}}
+            - name: PGPASSWORD
+              valueFrom: {secretKeyRef: {name: filestatistics-app-credentials, key: PGPASSWORD_DASHBOARD}}
+          startupProbe:
+            httpGet: {path: /health/live/, port: http, httpHeaders: [{name: Host, value: dashboard-probe.local}]}
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet: {path: /health/ready/, port: http, httpHeaders: [{name: Host, value: dashboard-probe.local}]}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /health/live/, port: http, httpHeaders: [{name: Host, value: dashboard-probe.local}]}
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests: {cpu: 100m, memory: 192Mi}
+            limits: {cpu: 500m, memory: 512Mi}

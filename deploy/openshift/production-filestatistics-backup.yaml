@@ -1,0 +1,67 @@
+# Production filestatistics backup. The first pre-migration backup is pinned.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dashboard-filestatistics-backup
+  namespace: core-omero-prod
+spec:
+  schedule: '20 6 * * 1-5'
+  timeZone: Europe/Stockholm
+  suspend: false
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 1800
+      template:
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          containers:
+            - name: backup
+              image: registry.redhat.io/rhel9/postgresql-15
+              resources:
+                requests: {cpu: 50m, memory: 128Mi}
+                limits: {cpu: 500m, memory: 512Mi}
+              env:
+                - {name: PGHOST, value: filestatistics-pg15}
+                - {name: PGPORT, value: '5432'}
+                - name: PGDATABASE
+                  valueFrom:
+                    secretKeyRef: {name: filestatistics-pg15-credentials, key: POSTGRESQL_DATABASE}
+                - name: PGUSER
+                  valueFrom:
+                    secretKeyRef: {name: dashboard-backup-reader, key: PGUSER}
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef: {name: dashboard-backup-reader, key: PGPASSWORD}
+              volumeMounts:
+                - {name: backup-volume, mountPath: /postgresbackup}
+                - {name: retention-script, mountPath: /opt/backup, readOnly: true}
+              command: ['/bin/bash', '-c']
+              args:
+                - |
+                  set -euo pipefail
+                  umask 077
+                  root=/postgresbackup/production-filestatistics
+                  mkdir -p "$root"
+                  df -h "$root"
+                  stage=$(mktemp -d "$root/.pending-XXXXXXXX")
+                  pg_dump --no-password --format=custom --no-owner --no-acl --file="$stage/database.dump"
+                  test -s "$stage/database.dump"
+                  pg_restore --exit-on-error --no-owner --no-acl --file=/dev/null "$stage/database.dump"
+                  (cd "$stage" && sha256sum database.dump > SHA256SUMS && sha256sum -c SHA256SUMS)
+                  stamp=$(TZ=Europe/Stockholm date +%Y%m%dT%H%M%S)
+                  final="$root/backup-$stamp-${stage##*.pending-}"
+                  test ! -e "$final"
+                  mv -- "$stage" "$final"
+                  echo "Verified backup published: ${final##*/}"
+                  du -h "$final/database.dump"
+                  BACKUP_ROOT="$root" PINNED_BACKUP=backup-20261110T165358-p8hCuj6V bash /opt/backup/production-backup-rotation.sh
+          volumes:
+            - name: backup-volume
+              persistentVolumeClaim: {claimName: postgresbackup}
+            - name: retention-script
+              configMap: {name: dashboard-backup-retention}

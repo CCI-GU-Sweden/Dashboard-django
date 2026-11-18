@@ -10,7 +10,7 @@ items:
     metadata:
       name: dashboard-django
     spec:
-      # The in-cluster poller starts candidates; image promotion remains manual.
+      # Start candidate builds manually; image promotion remains manual.
       runPolicy: Serial
       source:
         type: Git

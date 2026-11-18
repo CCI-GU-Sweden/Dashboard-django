@@ -1,0 +1,63 @@
+[
+  {
+    "op": "test",
+    "path": "/spec/template/spec/volumes",
+    "value": [
+      {
+        "configMap": {
+          "defaultMode": 420,
+          "name": "maintenance-mode"
+        },
+        "name": "maintenance-mode"
+      },
+      {
+        "configMap": {
+          "defaultMode": 420,
+          "name": "dashboard-production-gateway"
+        },
+        "name": "dashboard-gateway-config"
+      }
+    ]
+  },
+  {
+    "op": "test",
+    "path": "/spec/template/spec/containers/0/volumeMounts",
+    "value": [
+      {
+        "mountPath": "/etc/nginx/maintenance",
+        "name": "maintenance-mode",
+        "readOnly": true
+      },
+      {
+        "mountPath": "/etc/nginx/conf.d/default.conf",
+        "name": "dashboard-gateway-config",
+        "readOnly": true,
+        "subPath": "default.conf"
+      }
+    ]
+  },
+  {
+    "op": "replace",
+    "path": "/spec/template/spec/volumes",
+    "value": [
+      {
+        "configMap": {
+          "defaultMode": 420,
+          "name": "maintenance-mode"
+        },
+        "name": "maintenance-mode"
+      }
+    ]
+  },
+  {
+    "op": "replace",
+    "path": "/spec/template/spec/containers/0/volumeMounts",
+    "value": [
+      {
+        "mountPath": "/etc/nginx/maintenance",
+        "name": "maintenance-mode",
+        "readOnly": true
+      }
+    ]
+  }
+]

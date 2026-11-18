@@ -1,5 +1,5 @@
-# Poll GitHub from inside OpenShift when GitHub cannot reach the cluster API.
-# This starts candidate builds only; it never deploys an image.
+# Optional legacy automatic builder. The test CronJob was suspended on
+# 2026-11-18 in favor of manually started builds. It never deploys an image.
 apiVersion: v1
 kind: List
 items:
@@ -41,6 +41,7 @@ items:
       name: dashboard-build-poller
     spec:
       schedule: '*/5 * * * *'
+      suspend: true
       concurrencyPolicy: Forbid
       successfulJobsHistoryLimit: 2
       failedJobsHistoryLimit: 3

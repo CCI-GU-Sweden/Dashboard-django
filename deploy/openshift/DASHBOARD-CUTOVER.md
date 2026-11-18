@@ -67,6 +67,9 @@ delete either deployment to transfer data. The Django application already uses
 the shared PostgreSQL database, so switching the gateway does not require a
 copy of the ticket or OMERO data.
 
+Historical note: the poller described below was **suspended on 2026-11-18**;
+test builds are now started manually. See [manual test builds and deployments](TEST-BUILD-AND-DEPLOY.md).
+
 The BuildConfig tracks `main`. GitHub could not deliver a push webhook to the
 cluster API (connection ended with EOF), so `dashboard-build-poller` checks
 the GitHub branch from inside the cluster every five minutes. It starts a
@@ -78,7 +81,7 @@ limits. Monitor failed CronJobs and builds. The webhook trigger is disabled;
 remove the unused webhook in GitHub. Do not enable both mechanisms without
 accounting for duplicate builds. Polling was verified by build 21.
 
-A push normally produces a candidate image within five minutes. Verify its source revision and
+When enabled, a push normally produces a candidate image within five minutes. Verify its source revision and
 retain the digest. Do not enable an automatic deployment trigger because database
 migrations, compatibility and release checks must happen before an image serves
 users. Manual promotion of a tested immutable digest is the release gate.
