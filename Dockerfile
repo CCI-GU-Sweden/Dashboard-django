@@ -4,7 +4,8 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-RUN DJANGO_DEBUG=1 DJANGO_SECRET_KEY=build-only python manage.py collectstatic --noinput && chmod -R a+rX /app
+# Collect optional registry assets without enabling the registry at runtime.
+RUN DJANGO_DEBUG=1 DJANGO_SECRET_KEY=build-only DASHBOARD_GRIDS_ENABLED=1 python manage.py collectstatic --noinput && chmod -R a+rX /app
 USER 10001
 EXPOSE 8000
 CMD ["gunicorn", "dashboard.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "60", "--graceful-timeout", "30"]

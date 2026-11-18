@@ -14,6 +14,10 @@ OMERO fileset observation is installed from a pinned commit of [dashboard-omero-
 
 Ticket views, routes, interface, data access and ticket-specific models are installed from a pinned commit of [dashboard-tickets](https://github.com/CCI-GU-Sweden/dashboard-tickets). Set `DASHBOARD_TICKETS_ENABLED=0` before startup to disable its routes and overview. The paired core and module migrations transfer model state while preserving the existing `accounts_*` tables and content-type IDs. Historical core migrations still create those five empty tables on a fresh database even if tickets are disabled. Ticket table and helper setup are explicit module commands; see the module README for ordering and required grants.
 
+The cryo-EM [Grid Registry](https://github.com/CCI-GU-Sweden/cryo-em-database) is installed from a pinned commit as `cci-grids`. It is disabled by default; set `DASHBOARD_GRIDS_ENABLED=1` before startup to register its `/registry/` pages and overview card. It uses the dashboard accounts and ORCID session directly; only active Staff and Admin roles have access. The card reports grids stored at CCI and grids with unknown locations needing review. The module requires PostgreSQL; run its Django migrations through this host and collect static assets before starting an enabled deployment. Disabling it removes its routes/card and preserves its records. See the [integration guide](https://github.com/CCI-GU-Sweden/cryo-em-database/blob/18c6d62dd0c8c924a6715c98debaca3985787f9b/docs/09_DASHBOARD_INTEGRATION.md) for setup, local development and release checks.
+
+The registry release documents PostgreSQL 17. Integration was also exercised on an isolated PostgreSQL 15 instance for the existing test environment; this does not establish upstream support for PostgreSQL 15 or approve a production rollout. See [test registry operations](deploy/openshift/GRID-REGISTRY.md).
+
 ## Run locally
 
 Use Python 3.12 or newer. In PowerShell:

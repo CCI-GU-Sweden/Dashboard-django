@@ -7,3 +7,4 @@ Pillow==11.3.0
 cci-dashboard-upload-stats @ https://github.com/CCI-GU-Sweden/dashboard-upload-stats/archive/3b19ce9fd8760c4aa6ae760aa3e48f5f33e7a9be.tar.gz
 cci-dashboard-omero-filesets @ https://github.com/CCI-GU-Sweden/dashboard-omero-filesets/archive/431b8db0f190710ff7443523a76017681d0aeedd.tar.gz
 cci-dashboard-tickets @ https://github.com/CCI-GU-Sweden/dashboard-tickets/archive/5103239ef1ad262cc66612d1b3b01a29c7fef03a.tar.gz
+cci-grids @ https://github.com/CCI-GU-Sweden/cryo-em-database/archive/18c6d62dd0c8c924a6715c98debaca3985787f9b.tar.gz
