@@ -16,7 +16,7 @@ Ticket views, routes, interface, data access and ticket-specific models are inst
 
 The cryo-EM [Grid Registry](https://github.com/CCI-GU-Sweden/cryo-em-database) is installed from a pinned commit as `cci-grids`. It is disabled by default; set `DASHBOARD_GRIDS_ENABLED=1` before startup to register its `/registry/` pages and overview card. It uses the dashboard accounts and ORCID session directly; only active Staff and Admin roles have access. The card reports grids stored at CCI and grids with unknown locations needing review. The module requires PostgreSQL; run its Django migrations through this host and collect static assets before starting an enabled deployment. Disabling it removes its routes/card and preserves its records. See the [integration guide](https://github.com/CCI-GU-Sweden/cryo-em-database/blob/18c6d62dd0c8c924a6715c98debaca3985787f9b/docs/09_DASHBOARD_INTEGRATION.md) for setup, local development and release checks.
 
-The registry release documents PostgreSQL 17. Integration was also exercised on an isolated PostgreSQL 15 instance for the existing test environment; this does not establish upstream support for PostgreSQL 15 or approve a production rollout. See [test registry operations](deploy/openshift/GRID-REGISTRY.md).
+The dashboard module contract targets PostgreSQL 15. The registry release documents PostgreSQL 17; its integration was also exercised on isolated PostgreSQL 15 for the existing test environment. This host requirement does not change the registry release's own documented support policy or approve a production rollout. See [test registry operations](deploy/openshift/GRID-REGISTRY.md).
 
 ## Run locally
 

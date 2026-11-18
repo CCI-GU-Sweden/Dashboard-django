@@ -6,7 +6,8 @@ Set `DASHBOARD_GRIDS_ENABLED=1` on the test Deployment to enable its card and
 can use the registry; researchers and pending or disabled users cannot. The
 registry uses existing dashboard accounts and does not import separate users.
 
-The registry release specifies PostgreSQL 17. The existing test database is
+The dashboard module contract targets PostgreSQL 15, while the upstream
+registry release specifies PostgreSQL 17. The existing test database is
 PostgreSQL 15.18. The integrated candidate was rehearsed against isolated
 PostgreSQL 15.19: 19 registry contract tests passed and 72 dashboard account
 tests passed (three skipped). A separate role test exercised preparation,
