@@ -19,6 +19,10 @@ DASHBOARD_MODULES = []
 DASHBOARD_OMERO_ENABLED = os.environ.get('DASHBOARD_OMERO_ENABLED', '1') == '1'
 DASHBOARD_OMERO_BILLING_ENABLED = os.environ.get('DASHBOARD_OMERO_BILLING_ENABLED', '1') == '1'
 DASHBOARD_TICKETS_ENABLED = os.environ.get('DASHBOARD_TICKETS_ENABLED', '1') == '1'
+DASHBOARD_METROLOGY_ENABLED = os.environ.get('DASHBOARD_METROLOGY_ENABLED', '0') == '1'
+DASHBOARD_METROLOGY_OMERO_URLS = {}
+if os.environ.get('METROLOGY_OMERO_WEB_URL'):
+    DASHBOARD_METROLOGY_OMERO_URLS[os.environ.get('METROLOGY_OMERO_SOURCE', 'core-omero-test')] = os.environ['METROLOGY_OMERO_WEB_URL']
 if DASHBOARD_UPLOADS_ENABLED:
     INSTALLED_APPS.append('upload_stats')
     DASHBOARD_MODULES.append('upload_stats.dashboard_module.module')
@@ -28,6 +32,9 @@ if DASHBOARD_OMERO_ENABLED:
 if DASHBOARD_TICKETS_ENABLED:
     INSTALLED_APPS.append('dashboard_tickets')
     DASHBOARD_MODULES.append('dashboard_tickets.dashboard_module.module')
+if DASHBOARD_METROLOGY_ENABLED:
+    INSTALLED_APPS.append('dashboard_metrology')
+    DASHBOARD_MODULES.append('dashboard_metrology.dashboard_module.module')
 
 # The registry owns its tables and uses the dashboard's configured users/session.
 DASHBOARD_GRIDS_ENABLED = os.environ.get('DASHBOARD_GRIDS_ENABLED', '0') == '1'
