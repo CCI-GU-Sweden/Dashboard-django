@@ -8,4 +8,4 @@ cci-dashboard-upload-stats @ https://github.com/CCI-GU-Sweden/dashboard-upload-s
 cci-dashboard-omero-filesets @ https://github.com/CCI-GU-Sweden/dashboard-omero-filesets/archive/431b8db0f190710ff7443523a76017681d0aeedd.tar.gz
 cci-dashboard-tickets @ https://github.com/CCI-GU-Sweden/dashboard-tickets/archive/5103239ef1ad262cc66612d1b3b01a29c7fef03a.tar.gz
 cci-grids @ https://github.com/CCI-GU-Sweden/cryo-em-database/archive/18c6d62dd0c8c924a6715c98debaca3985787f9b.tar.gz
-cci-dashboard-metrology @ https://github.com/CCI-GU-Sweden/dashboard-metrology/archive/04304d0a96a26f132e5e2b8c09f479136876875a.tar.gz
+cci-dashboard-metrology @ https://github.com/CCI-GU-Sweden/dashboard-metrology/archive/c6d22d2de4cfe7d960217a91c826474e1eef47e8.tar.gz
