@@ -18,6 +18,8 @@ The cryo-EM [Grid Registry](https://github.com/CCI-GU-Sweden/cryo-em-database) i
 
 The dashboard module contract targets PostgreSQL 15. The registry release documents PostgreSQL 17; its integration was also exercised on isolated PostgreSQL 15 for the existing test environment. This host requirement does not change the registry release's own documented support policy or approve a production rollout. See [test registry operations](deploy/openshift/GRID-REGISTRY.md).
 
+For the planned production installation of Grid Registry and the separate Metrology processor and dashboard module, see the [step-by-step production guide](deploy/openshift/GRID-METROLOGY-PRODUCTION.md). It records the tested weekday schedule and identifies the production settings that still need to be determined.
+
 ## Run locally
 
 Use Python 3.12 or newer. In PowerShell:
