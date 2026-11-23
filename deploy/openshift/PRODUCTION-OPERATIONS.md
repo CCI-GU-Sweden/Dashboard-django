@@ -84,3 +84,35 @@ scheduler rollback patches, scale the old dashboard up and verify it, then
 resume the scheduler and release maintenance. Confirm Flask and OMERO as well.
 Keep new Django tables and production records for investigation; the old
 dashboard may not understand new ticket data, so avoid concurrent writes.
+
+## Grid and Metrology deployment, 2026-11-23
+
+The existing production `filestatistics-pg15/omerofilestats` database was kept
+in place. Grid migrations 0001–0003, Metrology SQL schema versions 1–6 and
+the dashboard ticket state migration were applied to it. No test database or
+test records were imported. Production backups were restored only into isolated
+temporary PostgreSQL instances for verification.
+
+Pinned backups on the production backup volume:
+
+- Before schema changes: `production-filestatistics/backup-20261123T102356-INWaC15l`.
+- After Grid and Metrology schema changes: `production-filestatistics/backup-20261123T104453-5JxE1Xw4`.
+
+Both archives were checked and restored in isolation. The later archive
+predates the ticket state migration and the first production measurement.
+Never restore either over the live database as an application rollback.
+
+The dashboard image is `sha256:e009c0626783dc2113f7b23be224136ced328528e0e8f35de0a1d30b2dd62d77`.
+The processor image is `sha256:0ea4fbeba212a05abf807866d39f03ee720236fe844c3650d0f56fad5bee0d8a`.
+The production Metrology CronJob runs at 16:00 Europe/Berlin on weekdays, with
+a limit of 10 filesets. Production credentials are in the
+`dashboard-metrology-omero` and `dashboard-metrology-db` Secrets. The initial
+one-fileset validation completed and wrote results to production PostgreSQL and
+attachments to production OMERO. Monitor job failures, memory and storage as
+the backlog is processed.
+
+The filestatistics PVC was expanded from 1 GiB to 5 GiB for the new results;
+monitor its usage and the backup volume as data accumulates. The backup reader
+was granted `pg_read_all_data` and `BYPASSRLS` to cover existing and future
+tables. These permissions apply across databases on the filestatistics PostgreSQL
+instance, not the separate OMERO database. See `19-production-backup-read-all.sql`.
