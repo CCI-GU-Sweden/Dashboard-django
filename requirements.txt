@@ -9,4 +9,4 @@ cci-dashboard-omero-filesets @ https://github.com/CCI-GU-Sweden/dashboard-omero-
 cci-dashboard-tickets @ https://github.com/CCI-GU-Sweden/dashboard-tickets/archive/5103239ef1ad262cc66612d1b3b01a29c7fef03a.tar.gz
 cci-grids @ https://github.com/CCI-GU-Sweden/cryo-em-database/archive/18c6d62dd0c8c924a6715c98debaca3985787f9b.tar.gz
 cci-dashboard-metrology @ https://github.com/CCI-GU-Sweden/dashboard-metrology/archive/21934bfbdf5dbc2000e838494044ebcc3cab0961.tar.gz
-dashboard-compute @ https://github.com/CCI-GU-Sweden/dashboard-compute/archive/9457373d3546059a44f8c2b067fc660ade7faded.tar.gz
+dashboard-compute @ https://github.com/CCI-GU-Sweden/dashboard-compute/archive/468f0f35d014a8abae8c194732359946a2bd8405.tar.gz
